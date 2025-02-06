@@ -9,64 +9,13 @@ defmodule Solana.RPC do
   import Solana.Helpers
 
   @typedoc "Solana JSON-RPC API client."
-  @type client :: Tesla.Client.t()
-
-  @client_schema [
-    adapter: [
-      type: :any,
-      default: Tesla.Adapter.Httpc,
-      doc: "Which `Tesla` adapter to use."
-    ],
-    network: [
-      type: {:custom, __MODULE__, :cluster_url, []},
-      required: true,
-      doc: "Which [Solana cluster](https://docs.solana.com/clusters) to connect to."
-    ],
-    retry_options: [
-      type: :keyword_list,
-      default: [],
-      doc: "Options to pass to `Tesla.Middleware.Retry`."
-    ]
-  ]
-  @doc """
-  Creates an API client used to interact with Solana's [JSON-RPC
-  API](https://docs.solana.com/developing/clients/jsonrpc-api).
-
-  ## Example
-
-      iex> key = Solana.keypair() |> Solana.pubkey!()
-      iex> client = Solana.RPC.client(network: "localhost")
-      iex> {:ok, signature} = Solana.RPC.send(client, Solana.RPC.Request.request_airdrop(key, 1))
-      iex> is_binary(signature)
-      true
-
-  ## Options
-
-  #{NimbleOptions.docs(@client_schema)}
-  """
-  @spec client(keyword) :: client
-  def client(opts) do
-    case validate(opts, @client_schema) do
-      {:ok, config} ->
-        middleware = [
-          {Tesla.Middleware.BaseUrl, config.network},
-          RPC.Middleware,
-          Tesla.Middleware.JSON,
-          {Tesla.Middleware.Retry, retry_opts(config)}
-        ]
-
-        Tesla.client(middleware, config.adapter)
-
-      error ->
-        error
-    end
-  end
 
   @doc """
   Sends the provided requests to the configured Solana RPC endpoint.
   """
-  def send(client, requests) do
-    Tesla.post(client, "/", Solana.RPC.Request.encode(requests))
+  def send(url, requests) do
+    Req.new(base_url: url)
+    |> Req.post(json: Solana.RPC.Request.encode(requests))
   end
 
   @doc """
@@ -76,14 +25,12 @@ defmodule Solana.RPC do
   an error tuple containing the list of all the transactions that were confirmed
   before the error occurred.
   """
-  @spec send_and_confirm(client, pid, [Solana.Transaction.t()] | Solana.Transaction.t(), keyword) ::
-          {:ok, [binary]} | {:error, :timeout, [binary]}
-  def send_and_confirm(client, tracker, txs, opts \\ []) do
+  def send_and_confirm(url, tracker, txs, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, 5_000)
     request_opts = Keyword.take(opts, [:commitment])
     requests = Enum.map(List.wrap(txs), &RPC.Request.send_transaction(&1, request_opts))
 
-    client
+    url
     |> RPC.send(requests)
     |> Enum.flat_map(fn
       {:ok, signature} ->

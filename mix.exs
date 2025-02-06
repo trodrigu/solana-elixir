@@ -49,7 +49,7 @@ defmodule Solana.MixProject do
   defp deps do
     [
       # base client
-      {:tesla, "~> 1.4.0"},
+      {:req, "~> 0.5.8"},
       # json library
       {:jason, ">= 1.0.0"},
       # keys and signatures

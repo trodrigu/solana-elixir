@@ -63,12 +63,6 @@ def deps do
 end
 ```
 
-Then, specify the corresponding `Tesla.Adapter` when creating your client:
-
-```elixir
-client = Solana.RPC.client(network: "localhost", adapter: {Tesla.Adapter.Gun, certificates_verification: true})
-```
-
 See the `Solana.RPC` module for more details about which options are available
 when creating an API client.
 
