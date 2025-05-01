@@ -114,7 +114,7 @@ defmodule Solana.Transaction do
     end
   end
 
-  defp check_instructions(ixs) do
+  def check_instructions(ixs) do
     ixs
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, ixs}, fn
@@ -152,7 +152,7 @@ defmodule Solana.Transaction do
     [
       create_header(accounts),
       CompactArray.to_iolist(Enum.map(accounts, & &1.key)),
-      blockhash,
+      blockhash |> :erlang.binary_to_list(),
       CompactArray.to_iolist(encode_instructions(ixs, accounts))
     ]
     |> :erlang.list_to_binary()
