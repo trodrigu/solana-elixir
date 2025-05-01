@@ -17,6 +17,8 @@ defmodule Solana.RPC.Tracker do
   """
   use GenServer
 
+  require Logger
+
   alias Solana.RPC
 
   @doc """
@@ -38,23 +40,40 @@ defmodule Solana.RPC.Tracker do
   end
 
   @doc false
-  def init(opts) do
-    client_opts = Keyword.take(opts, [:network, :retry_options, :adapter])
-    {:ok, %{client: Solana.RPC.client(client_opts), t: Keyword.get(opts, :t, 500)}}
+  def init(_opts) do
+    client_opts = Keyword.take(opts, [:network])
+
+    {:ok, %{network: network, t: 3000}}
   end
 
   @doc false
   def handle_cast({:track, signatures, opts, from}, state) do
-    Process.send_after(self(), {:check, signatures, opts, from}, 0)
+    Process.send_after(self(), {:check, signatures, opts, from}, 3000)
     {:noreply, state}
   end
 
   @doc false
   def handle_info({:check, signatures, opts, from}, state) do
-    request = RPC.Request.get_signature_statuses(signatures)
+    request = RPC.Request.get_signature_statuses(signatures, search_transaction_history: true)
     commitment = Keyword.get(opts, :commitment, "finalized")
 
-    {:ok, results} = RPC.send(state.client, request)
+    response = RPC.send(state.network, request)
+
+    results =
+      case response do
+        {:ok, %{body: body}} ->
+          get_in(body, ["result", "value"])
+        {:error, %{"data" => %{"logs" => logs}, "message" => message}} ->
+          [message | logs]
+          |> Enum.join("\n")
+          |> Logger.error()
+
+          []
+
+        {:error, error} ->
+          Logger.error("error sending transaction: #{inspect(error)}")
+          []
+      end
 
     mapped_results = signatures |> Enum.zip(results) |> Enum.into(%{})
 
