@@ -88,7 +88,7 @@ defmodule Solana.RPC.Request do
   """
   @spec get_recent_blockhash(opts :: keyword) :: t
   def get_recent_blockhash(opts \\ []) do
-    {"getRecentBlockhash", [encode_opts(opts)]}
+    {"getLatestBlockhash", [encode_opts(opts)]}
   end
 
   @doc """
@@ -160,7 +160,7 @@ defmodule Solana.RPC.Request do
   """
   @spec get_signature_statuses(signatures :: [Solana.key()], opts :: keyword) :: t
   def get_signature_statuses(signatures, opts \\ []) when is_list(signatures) do
-    {"getSignatureStatuses", [Enum.map(signatures, &B58.encode58/1), encode_opts(opts)]}
+    {"getSignatureStatuses", [signatures, encode_opts(opts)]}
   end
 
   @doc """
