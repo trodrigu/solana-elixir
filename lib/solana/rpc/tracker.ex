@@ -40,9 +40,7 @@ defmodule Solana.RPC.Tracker do
   end
 
   @doc false
-  def init(_opts) do
-    client_opts = Keyword.take(opts, [:network])
-
+  def init(network: network) do
     {:ok, %{network: network, t: 3000}}
   end
 
