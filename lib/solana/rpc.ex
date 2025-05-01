@@ -6,9 +6,6 @@ defmodule Solana.RPC do
   require Logger
 
   alias Solana.RPC
-  import Solana.Helpers
-
-  @typedoc "Solana JSON-RPC API client."
 
   @doc """
   Sends the provided requests to the configured Solana RPC endpoint.
@@ -32,21 +29,17 @@ defmodule Solana.RPC do
 
     url
     |> RPC.send(requests)
-    |> Enum.flat_map(fn
-      {:ok, signature} ->
+    |> case do
+      {:ok, %{body: body}} ->
+        [%{"result" => signature}] = body
         [signature]
-
       {:error, %{"data" => %{"logs" => logs}, "message" => message}} ->
         [message | logs]
         |> Enum.join("\n")
         |> Logger.error()
 
         []
-
-      {:error, error} ->
-        Logger.error("error sending transaction: #{inspect(error)}")
-        []
-    end)
+    end
     |> case do
       [] ->
         :error
@@ -86,16 +79,4 @@ defmodule Solana.RPC do
   end
 
   def cluster_url(_), do: {:error, "invalid cluster"}
-
-  defp retry_opts(%{retry_options: retry_options}) do
-    Keyword.merge(retry_defaults(), retry_options)
-  end
-
-  defp retry_defaults() do
-    [max_retries: 10, max_delay: 4_000, should_retry: &should_retry?/1]
-  end
-
-  defp should_retry?({:ok, %{status: status}}) when status in 500..599, do: true
-  defp should_retry?({:ok, _}), do: false
-  defp should_retry?({:error, _}), do: true
 end
