@@ -40,7 +40,7 @@ defmodule Solana.RPC.Tracker do
   end
 
   @doc false
-  def init(network: network) do
+  def init(network) do
     {:ok, %{network: network, t: 3000}}
   end
 
