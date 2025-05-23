@@ -115,6 +115,19 @@ defmodule Solana.RPC.Request do
     {"sendTransaction", [Base.encode64(tx_bin), opts]}
   end
 
+  @doc """
+  Simulates a signed transaction to the cluster for processing.
+
+  For more information, see [the Solana
+  docs](https://docs.solana.com/developing/clients/jsonrpc-api#sendtransaction).
+  """
+  @spec simulate_transaction(transaction :: Solana.Transaction.t(), opts :: keyword) :: t
+  def simulate_transaction(tx = %Solana.Transaction{}, opts \\ []) do
+    {:ok, tx_bin} = Solana.Transaction.to_binary(tx)
+    opts = opts |> fix_tx_opts() |> encode_opts(%{"encoding" => "base64"})
+    {"simulateTransaction", [Base.encode64(tx_bin), opts]}
+  end
+
   defp fix_tx_opts(opts) do
     opts
     |> Enum.map(fn
