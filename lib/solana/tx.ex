@@ -6,14 +6,38 @@ defmodule Solana.Transaction do
   require Logger
   alias Solana.{Account, CompactArray, Instruction}
 
+  defmodule AddressTableLookup do
+    @moduledoc """
+    Represents an address table lookup for versioned Solana transactions.
+    - account_key: The address lookup table account public key.
+    - writable_indexes: List of indexes into the lookup table for writable accounts.
+    - readonly_indexes: List of indexes into the lookup table for readonly accounts.
+    """
+    defstruct [
+      :account_key,
+      writable_indexes: [],
+      readonly_indexes: []
+    ]
+  end
+
   @typedoc """
   All the details needed to encode a transaction.
+  - version: Transaction version (0 = legacy, 1 = v0 versioned, etc.)
+  - address_table_lookups: List of address table lookups for versioned transactions.
   """
+  @type address_table_lookup :: %AddressTableLookup{
+          account_key: Solana.key(),
+          writable_indexes: [non_neg_integer()],
+          readonly_indexes: [non_neg_integer()]
+        }
+
   @type t :: %__MODULE__{
           payer: Solana.key() | nil,
           blockhash: binary | nil,
           instructions: [Instruction.t()],
-          signers: [Solana.keypair()]
+          signers: [Solana.keypair()],
+          version: non_neg_integer(),
+          address_table_lookups: [address_table_lookup()]
         }
 
   @typedoc """
@@ -30,7 +54,9 @@ defmodule Solana.Transaction do
     :payer,
     :blockhash,
     instructions: [],
-    signers: []
+    signers: [],
+    version: 0,
+    address_table_lookups: []
   ]
 
   @doc """
@@ -83,32 +109,25 @@ defmodule Solana.Transaction do
   via `Logger.error/1`.
   """
   @spec to_binary(tx :: t) :: {:ok, binary()} | {:error, encoding_err()}
-  def to_binary(%__MODULE__{payer: nil}), do: {:error, :no_payer}
-  def to_binary(%__MODULE__{blockhash: nil}), do: {:error, :no_blockhash}
-  def to_binary(%__MODULE__{instructions: []}), do: {:error, :no_instructions}
-
-  def to_binary(tx = %__MODULE__{instructions: ixs, signers: signers}) do
-    with {:ok, ixs} <- check_instructions(List.flatten(ixs)),
+  def to_binary(%__MODULE__{version: 0} = tx), do: to_binary_legacy(tx)
+  def to_binary(%__MODULE__{version: 1, address_table_lookups: lookups} = tx) do
+    with {:ok, ixs} <- check_instructions(List.flatten(tx.instructions)),
          accounts = compile_accounts(ixs, tx.payer),
-         true <- signers_match?(accounts, signers) do
-      message = encode_message(accounts, tx.blockhash, ixs)
-
+         true <- signers_match?(accounts, tx.signers) do
+      message = encode_message_v0(accounts, tx.blockhash, ixs, lookups)
       signatures =
-        signers
+        tx.signers
         |> reorder_signers(accounts)
         |> Enum.map(&sign(&1, message))
         |> CompactArray.to_iolist()
-
-      {:ok, :erlang.list_to_binary([signatures, message])}
+      {:ok, :erlang.list_to_binary([[0x80], signatures, message])}
     else
       {:error, :no_program, idx} ->
         Logger.error("Missing program id on instruction at index #{idx}")
         {:error, :no_program}
-
       {:error, message, idx} ->
         Logger.error("error compiling instruction at index #{idx}: #{inspect(message)}")
         {:error, message}
-
       false ->
         {:error, :mismatched_signers}
     end
@@ -148,14 +167,24 @@ defmodule Solana.Transaction do
   end
 
   # https://docs.solana.com/developing/programming-model/transactions#message-format
-  defp encode_message(accounts, blockhash, ixs) do
+  defp encode_message_v0(accounts, blockhash, ixs, lookups) do
     [
       create_header(accounts),
       CompactArray.to_iolist(Enum.map(accounts, & &1.key)),
       blockhash |> :erlang.binary_to_list(),
+      encode_address_table_lookups(lookups),
       CompactArray.to_iolist(encode_instructions(ixs, accounts))
     ]
     |> :erlang.list_to_binary()
+  end
+
+  defp encode_address_table_lookups([]), do: CompactArray.to_iolist([])
+  defp encode_address_table_lookups(lookups) do
+    [CompactArray.encode_length(length(lookups)) |
+      Enum.flat_map(lookups, fn %AddressTableLookup{account_key: key, writable_indexes: w, readonly_indexes: r} ->
+        [key, CompactArray.to_iolist(w), CompactArray.to_iolist(r)]
+      end)
+    ]
   end
 
   # https://docs.solana.com/developing/programming-model/transactions#message-header-format
@@ -215,37 +244,70 @@ defmodule Solana.Transaction do
   message](https://docs.solana.com/developing/programming-model/transactions#signatures)
   """
   @spec parse(encoded :: binary) :: {t(), keyword} | :error
-  def parse(encoded) do
-    with {signatures, message, _} <- CompactArray.decode_and_split(encoded, 64),
+  def parse(<<0x80, rest::binary>>) do
+    # v0 versioned transaction
+    with {signatures, message, _} <- CompactArray.decode_and_split(rest, 64),
          <<header::binary-size(3), contents::binary>> <- message,
-         {account_keys, hash_and_ixs, key_count} <- CompactArray.decode_and_split(contents, 32),
-         <<blockhash::binary-size(32), ix_data::binary>> <- hash_and_ixs,
-         {:ok, instructions} <- extract_instructions(ix_data) do
-      tx_accounts = derive_accounts(account_keys, key_count, header)
-      indices = Enum.into(Enum.with_index(tx_accounts, &{&2, &1}), %{})
+         {account_keys, contents, _key_count} <- CompactArray.decode_and_split(contents, 32),
+         <<blockhash::binary-size(32), contents::binary>> <- contents,
+         {lookups, contents} <- parse_address_table_lookups(contents),
+         {:ok, raw_instructions} <- extract_instructions(contents) do
+      # Build full account list: static + lookup table keys
+      lookup_keys = Enum.flat_map(lookups, fn l ->
+        Enum.map(l.writable_indexes ++ l.readonly_indexes, fn _ -> nil end)
+      end)
+      # For now, we don't have the actual lookup table keys, so we only use static keys
+      # In a real implementation, you would fetch the lookup table accounts and insert their keys here
+      full_accounts = account_keys ++ lookup_keys
+      _indices = Enum.into(Enum.with_index(full_accounts, &{&2, &1}), %{})
+
+      # Resolve instructions
+      instructions = Enum.map(raw_instructions, fn {program_idx, account_indices, data} ->
+        %Instruction{
+          data: if(data == "", do: nil, else: :binary.list_to_bin(data)),
+          program: Enum.at(full_accounts, program_idx),
+          accounts: Enum.map(account_indices, &%Account{key: Enum.at(full_accounts, &1)})
+        }
+      end)
 
       {
         %__MODULE__{
-          payer: tx_accounts |> List.first() |> Map.get(:key),
+          payer: account_keys |> List.first(),
           blockhash: blockhash,
-          instructions:
-            Enum.map(instructions, fn {program, accounts, data} ->
-              %Instruction{
-                data: if(data == "", do: nil, else: :binary.list_to_bin(data)),
-                program: Map.get(indices, program) |> Map.get(:key),
-                accounts: Enum.map(accounts, &Map.get(indices, &1))
-              }
-            end)
+          instructions: instructions,
+          version: 1,
+          address_table_lookups: lookups
         },
         [
-          accounts: tx_accounts,
+          accounts: full_accounts,
           header: header,
-          signatures: signatures
+          signatures: signatures,
+          address_table_lookups: lookups
         ]
       }
     else
       _ -> :error
     end
+  end
+  def parse(encoded), do: parse_legacy(encoded)
+
+  defp parse_address_table_lookups(data) do
+    case CompactArray.decode_and_split(data) do
+      {<<>>, 0} -> {[], <<>>}
+      {raw, count} ->
+        parse_address_table_lookups(raw, count, [])
+    end
+  end
+  defp parse_address_table_lookups(data, 0, acc), do: {Enum.reverse(acc), data}
+  defp parse_address_table_lookups(<<key::binary-size(32), rest::binary>>, n, acc) do
+    {writable, rest, _} = CompactArray.decode_and_split(rest, 1)
+    {readonly, rest, _} = CompactArray.decode_and_split(rest, 1)
+    lookup = %AddressTableLookup{
+      account_key: key,
+      writable_indexes: Enum.map(writable, &:binary.decode_unsigned/1),
+      readonly_indexes: Enum.map(readonly, &:binary.decode_unsigned/1)
+    }
+    parse_address_table_lookups(rest, n - 1, [lookup | acc])
   end
 
   defp extract_instructions(data) do
@@ -293,5 +355,152 @@ defmodule Solana.Transaction do
       Enum.map(nonsigners_write, &%Account{key: &1, writable?: true}),
       Enum.map(nonsigners_read, &%Account{key: &1})
     ])
+  end
+
+  defp to_binary_legacy(%__MODULE__{payer: nil}), do: {:error, :no_payer}
+  defp to_binary_legacy(%__MODULE__{blockhash: nil}), do: {:error, :no_blockhash}
+  defp to_binary_legacy(%__MODULE__{instructions: []}), do: {:error, :no_instructions}
+
+  defp to_binary_legacy(tx = %__MODULE__{instructions: ixs, signers: signers}) do
+    with {:ok, ixs} <- check_instructions(List.flatten(ixs)),
+         accounts = compile_accounts(ixs, tx.payer),
+         true <- signers_match?(accounts, signers) do
+      message = encode_message_legacy(accounts, tx.blockhash, ixs)
+
+      signatures =
+        signers
+        |> reorder_signers(accounts)
+        |> Enum.map(&sign(&1, message))
+        |> CompactArray.to_iolist()
+
+      {:ok, :erlang.list_to_binary([signatures, message])}
+    else
+      {:error, :no_program, idx} ->
+        Logger.error("Missing program id on instruction at index #{idx}")
+        {:error, :no_program}
+
+      {:error, message, idx} ->
+        Logger.error("error compiling instruction at index #{idx}: #{inspect(message)}")
+        {:error, message}
+
+      false ->
+        {:error, :mismatched_signers}
+    end
+  end
+
+  defp encode_message_legacy(accounts, blockhash, ixs) do
+    [
+      create_header(accounts),
+      CompactArray.to_iolist(Enum.map(accounts, & &1.key)),
+      blockhash |> :erlang.binary_to_list(),
+      CompactArray.to_iolist(encode_instructions(ixs, accounts))
+    ]
+    |> :erlang.list_to_binary()
+  end
+
+  defp parse_legacy(encoded) do
+    with {signatures, message, _} <- CompactArray.decode_and_split(encoded, 64),
+         <<header::binary-size(3), contents::binary>> <- message,
+         {account_keys, hash_and_ixs, key_count} <- CompactArray.decode_and_split(contents, 32),
+         <<blockhash::binary-size(32), ix_data::binary>> <- hash_and_ixs,
+         {:ok, instructions} <- extract_instructions(ix_data) do
+      tx_accounts = derive_accounts(account_keys, key_count, header)
+      indices = Enum.into(Enum.with_index(tx_accounts, &{&2, &1}), %{})
+
+      {
+        %__MODULE__{
+          payer: tx_accounts |> List.first() |> Map.get(:key),
+          blockhash: blockhash,
+          instructions:
+            Enum.map(instructions, fn {program, accounts, data} ->
+              %Instruction{
+                data: if(data == "", do: nil, else: :binary.list_to_bin(data)),
+                program: Map.get(indices, program) |> Map.get(:key),
+                accounts: Enum.map(accounts, &Map.get(indices, &1))
+              }
+            end)
+        },
+        [
+          accounts: tx_accounts,
+          header: header,
+          signatures: signatures
+        ]
+      }
+    else
+      _ -> :error
+    end
+  end
+
+  @doc """
+  Parses a versioned transaction and resolves address lookup table keys from the network.
+  Accepts:
+    - encoded: the transaction binary
+    - rpc_url: the Solana RPC endpoint
+    - fetch_fun: (optional) a function to fetch account info (defaults to Solana.RPC.send/2)
+  Returns {transaction, extras} or :error
+  """
+  def parse_with_lookup(encoded, rpc_url, fetch_fun \\ &Solana.RPC.send/2) do
+    case encoded do
+      <<0x80, rest::binary>> ->
+        with {signatures, message, _} <- CompactArray.decode_and_split(rest, 64),
+             <<header::binary-size(3), contents::binary>> <- message,
+             {account_keys, contents, _key_count} <- CompactArray.decode_and_split(contents, 32),
+             <<blockhash::binary-size(32), contents::binary>> <- contents,
+             {lookups, contents} <- parse_address_table_lookups(contents),
+             {:ok, raw_instructions} <- extract_instructions(contents) do
+          # Fetch and parse lookup table keys from the network
+          lookup_keys = Enum.flat_map(lookups, fn lookup ->
+            keys = fetch_lookup_table_keys(lookup.account_key, rpc_url, fetch_fun)
+            Enum.map(lookup.writable_indexes ++ lookup.readonly_indexes, &Enum.at(keys, &1))
+          end)
+          full_accounts = account_keys ++ lookup_keys
+          # Resolve instructions
+          instructions = Enum.map(raw_instructions, fn {program_idx, account_indices, data} ->
+            %Instruction{
+              data: if(data == "", do: nil, else: :binary.list_to_bin(data)),
+              program: Enum.at(full_accounts, program_idx),
+              accounts: Enum.map(account_indices, &%Account{key: Enum.at(full_accounts, &1)})
+            }
+          end)
+          {
+            %__MODULE__{
+              payer: account_keys |> List.first(),
+              blockhash: blockhash,
+              instructions: instructions,
+              version: 1,
+              address_table_lookups: lookups
+            },
+            [
+              accounts: full_accounts,
+              header: header,
+              signatures: signatures,
+              address_table_lookups: lookups
+            ]
+          }
+        else
+          _ -> :error
+        end
+      _ -> parse(encoded)
+    end
+  end
+
+  defp fetch_lookup_table_keys(table_pubkey, rpc_url, fetch_fun) do
+    req = Solana.RPC.Request.get_account_info(table_pubkey, encoding: "base64")
+    case fetch_fun.(rpc_url, req) do
+      {:ok, %{body: [%{"result" => %{"value" => %{"data" => [b64, "base64"]}}}]}} ->
+        data = Base.decode64!(b64)
+        parse_lookup_table_account_data(data)
+      _ -> []
+    end
+  end
+
+  defp parse_lookup_table_account_data(data) do
+    # Address Lookup Table format:
+    # 32 bytes: authority
+    # 8 bytes: deactivation slot
+    # 4 bytes: key count (little-endian)
+    # N * 32 bytes: keys
+    <<_authority::binary-size(32), _deact_slot::binary-size(8), key_count::little-32, rest::binary>> = data
+    for <<key::binary-size(32) <- binary_part(rest, 0, key_count * 32)>>, do: key
   end
 end

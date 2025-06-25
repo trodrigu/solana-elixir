@@ -23,7 +23,8 @@ defmodule Solana.MixProject do
 
   def application do
     [
-      extra_applications: [:logger]
+      extra_applications: [:logger],
+      mod: {Solana.Application, []}
     ]
   end
 
@@ -60,7 +61,9 @@ defmodule Solana.MixProject do
       {:nimble_options, "~> 0.4.0"},
       # docs and testing
       {:ex_doc, "~> 0.25.5", only: :dev, runtime: false},
-      {:dialyxir, "~> 1.0", only: [:dev, :test], runtime: false}
+      {:dialyxir, "~> 1.0", only: [:dev, :test], runtime: false},
+      {:tidewave, "~> 0.1", only: :dev},
+      {:bandit, "~> 1.0", only: :dev}
     ]
   end
 
