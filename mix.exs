@@ -63,7 +63,8 @@ defmodule Solana.MixProject do
       {:ex_doc, "~> 0.25.5", only: :dev, runtime: false},
       {:dialyxir, "~> 1.0", only: [:dev, :test], runtime: false},
       {:tidewave, "~> 0.1", only: :dev},
-      {:bandit, "~> 1.0", only: :dev}
+      {:bandit, "~> 1.0", only: :dev},
+      {:mox, "~> 1.2.0", only: :test}
     ]
   end
 

@@ -5,6 +5,10 @@ defmodule Solana.RPC do
   """
   require Logger
 
+  @callback send(String.t(), any()) :: any()
+
+  @behaviour __MODULE__
+
   alias Solana.RPC
 
   @doc """

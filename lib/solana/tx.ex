@@ -450,7 +450,7 @@ defmodule Solana.Transaction do
              {:ok, raw_instructions} <- extract_instructions(contents) do
           # Fetch and parse lookup table keys from the network
           lookup_keys = Enum.flat_map(lookups, fn lookup ->
-            keys = fetch_lookup_table_keys(lookup.account_key, rpc_url, fetch_fun)
+            keys = fetch_lookup_table_keys(lookup.account_key, rpc_url)
             Enum.map(lookup.writable_indexes ++ lookup.readonly_indexes, &Enum.at(keys, &1))
           end)
           full_accounts = account_keys ++ lookup_keys
@@ -484,9 +484,9 @@ defmodule Solana.Transaction do
     end
   end
 
-  defp fetch_lookup_table_keys(table_pubkey, rpc_url, fetch_fun) do
+  defp fetch_lookup_table_keys(table_pubkey, rpc_url) do
     req = Solana.RPC.Request.get_account_info(table_pubkey, encoding: "base64")
-    case fetch_fun.(rpc_url, req) do
+    case rpc_client().send(rpc_url, req) do
       {:ok, %{body: [%{"result" => %{"value" => %{"data" => [b64, "base64"]}}}]}} ->
         data = Base.decode64!(b64)
         parse_lookup_table_account_data(data)
@@ -502,5 +502,9 @@ defmodule Solana.Transaction do
     # N * 32 bytes: keys
     <<_authority::binary-size(32), _deact_slot::binary-size(8), key_count::little-32, rest::binary>> = data
     for <<key::binary-size(32) <- binary_part(rest, 0, key_count * 32)>>, do: key
+  end
+
+  defp rpc_client do
+    Application.get_env(:solana, :rpc_client, Solana.Rpc)
   end
 end
