@@ -9,6 +9,7 @@ defmodule Solana.TransactionTest do
   setup :verify_on_exit!
 
   alias Solana.{Transaction, Instruction, Account}
+  alias Solana.AddressTableHelper
 
   describe "to_binary/1" do
     test "fails if there's no blockhash" do
@@ -214,12 +215,15 @@ defmodule Solana.TransactionTest do
       payer = Solana.keypair()
       blockhash = Solana.keypair() |> Solana.pubkey!()
       program = Solana.keypair() |> Solana.pubkey!()
+
       ix = %Instruction{
         program: program,
         accounts: [%Account{key: Solana.pubkey!(payer), writable?: true, signer?: true}]
       }
+
       lookup_table_pubkey = :crypto.strong_rand_bytes(32)
       lookup_key = :crypto.strong_rand_bytes(32)
+
       tx = %Transaction{
         payer: Solana.pubkey!(payer),
         instructions: [ix],
@@ -234,6 +238,7 @@ defmodule Solana.TransactionTest do
           }
         ]
       }
+
       assert {:ok, bin} = Transaction.to_binary(tx)
       assert is_binary(bin)
       assert :binary.first(bin) == 0x80
@@ -244,86 +249,75 @@ defmodule Solana.TransactionTest do
     end
 
     test "encodes provided transaction and checks size is less than 1232 bytes" do
-      # Exact accounts as provided
-      accounts = [
-        %Solana.Account{key: <<6, 221, 246, 225, 215, 101, 161, 147, 217, 203, 225, 70, 206, 235, 121, 172, 28, 180, 133, 237, 95, 91, 55, 145, 58, 140, 245, 133, 126, 255, 0, 169>>, signer?: false, writable?: false},
-        %Solana.Account{key: <<172, 26, 227, 208, 135, 242, 146, 55, 6, 37, 72, 247, 12, 76, 4, 174, 194, 169, 149, 105, 73, 134, 231, 203, 180, 103, 82, 6, 33, 211, 134, 48>>, signer?: false, writable?: false},
-        %Solana.Account{key: <<157, 165, 172, 116, 127, 61, 108, 104, 47, 113, 145, 40, 116, 91, 205, 192, 14, 113, 164, 27, 39, 16, 199, 51, 122, 47, 136, 189, 117, 132, 203, 212>>, signer?: true, writable?: false},
-        %Solana.Account{key: <<183, 77, 31, 35, 232, 221, 5, 189, 244, 67, 163, 170, 149, 191, 217, 65, 215, 108, 155, 93, 36, 219, 20, 213, 222, 131, 48, 238, 226, 69, 34, 59>>, signer?: false, writable?: true},
-        %Solana.Account{key: <<233, 212, 72, 139, 7, 254, 57, 155, 26, 145, 85, 229, 130, 27, 105, 125, 67, 1, 108, 10, 60, 79, 59, 188, 162, 175, 180, 29, 1, 99, 48, 87>>, signer?: false, writable?: true},
-        %Solana.Account{key: <<192, 167, 138, 134, 184, 31, 163, 35, 58, 223, 152, 137, 51, 153, 8, 181, 110, 185, 71, 12, 49, 170, 181, 196, 176, 231, 195, 59, 252, 139, 49, 191>>, signer?: false, writable?: true},
-        %Solana.Account{key: <<160, 113, 2, 127, 115, 211, 192, 206, 223, 99, 139, 92, 157, 88, 35, 111, 201, 58, 33, 43, 53, 187, 150, 91, 231, 16, 149, 121, 139, 112, 126, 239>>, signer?: false, writable?: true},
-        %Solana.Account{key: <<198, 250, 122, 243, 190, 219, 173, 58, 61, 101, 243, 106, 171, 201, 116, 49, 177, 187, 228, 194, 210, 246, 224, 228, 124, 166, 2, 3, 69, 47, 93, 97>>, signer?: false, writable?: false},
-        %Solana.Account{key: <<163, 20, 167, 170, 3, 43, 231, 16, 229, 136, 114, 85, 23, 1, 169, 23, 90, 122, 55, 127, 38, 161, 248, 55, 234, 71, 184, 250, 129, 217, 78, 0>>, signer?: false, writable?: false},
-        %Solana.Account{key: <<4, 121, 213, 91, 242, 49, 192, 110, 238, 116, 197, 110, 206, 104, 21, 7, 253, 177, 178, 222, 163, 244, 142, 81, 2, 177, 205, 162, 86, 188, 19, 143>>, signer?: false, writable?: false},
-        %Solana.Account{key: <<4, 121, 213, 91, 242, 49, 192, 110, 238, 116, 197, 110, 206, 104, 21, 7, 253, 177, 178, 222, 163, 244, 142, 81, 2, 177, 205, 162, 86, 188, 19, 143>>, signer?: false, writable?: false},
-        %Solana.Account{key: <<180, 63, 250, 39, 245, 215, 246, 74, 116, 192, 155, 31, 41, 88, 121, 222, 75, 9, 171, 54, 223, 201, 221, 81, 75, 50, 26, 167, 179, 140, 229, 232>>, signer?: false, writable?: false},
-        %Solana.Account{key: <<4, 121, 213, 91, 242, 49, 192, 110, 238, 116, 197, 110, 206, 104, 21, 7, 253, 177, 178, 222, 163, 244, 142, 81, 2, 177, 205, 162, 86, 188, 19, 143>>, signer?: false, writable?: false},
-        %Solana.Account{key: <<6, 155, 232, 110, 201, 175, 101, 235, 74, 97, 79, 217, 155, 142, 146, 84, 125, 160, 20, 95, 171, 94, 128, 74, 219, 89, 77, 179, 231, 58, 39, 27>>, signer?: false, writable?: false},
-        %Solana.Account{key: <<172, 26, 227, 208, 135, 242, 146, 55, 6, 37, 72, 247, 12, 76, 4, 174, 194, 169, 149, 105, 73, 134, 231, 203, 180, 103, 82, 6, 33, 211, 134, 48>>, signer?: false, writable?: false},
-        %Solana.Account{key: <<69, 167, 110, 83, 33, 167, 235, 108, 178, 101, 236, 81, 121, 174, 39, 0, 182, 155, 211, 46, 65, 189, 203, 221, 222, 57, 122, 79, 33, 190, 60, 127>>, signer?: false, writable?: true},
-        %Solana.Account{key: <<161, 241, 251, 140, 5, 0, 34, 191, 180, 24, 245, 53, 254, 78, 95, 164, 157, 151, 253, 109, 141, 103, 232, 191, 32, 230, 250, 95, 173, 248, 197, 220>>, signer?: false, writable?: true},
-        %Solana.Account{key: <<46, 114, 218, 226, 246, 153, 246, 36, 193, 115, 53, 14, 184, 151, 53, 181, 50, 12, 111, 219, 129, 249, 175, 9, 91, 194, 12, 162, 186, 75, 156, 169>>, signer?: false, writable?: true},
-        %Solana.Account{key: <<119, 4, 122, 56, 28, 57, 21, 56, 247, 163, 186, 66, 186, 254, 132, 29, 69, 63, 38, 213, 46, 113, 166, 100, 67, 246, 175, 30, 221, 116, 138, 253>>, signer?: false, writable?: true},
-        %Solana.Account{key: <<233, 212, 72, 139, 7, 254, 57, 155, 26, 145, 85, 229, 130, 27, 105, 125, 67, 1, 108, 10, 60, 79, 59, 188, 162, 175, 180, 29, 1, 99, 48, 87>>, signer?: false, writable?: true},
-        %Solana.Account{key: <<6, 221, 246, 225, 215, 101, 161, 147, 217, 203, 225, 70, 206, 235, 121, 172, 28, 180, 133, 237, 95, 91, 55, 145, 58, 140, 245, 133, 126, 255, 0, 169>>, signer?: false, writable?: false},
-        %Solana.Account{key: <<6, 167, 213, 23, 24, 123, 209, 102, 53, 218, 212, 4, 85, 253, 194, 192, 193, 36, 198, 143, 33, 86, 117, 165, 219, 186, 203, 95, 8, 0, 0, 0>>, signer?: false, writable?: false},
-        %Solana.Account{key: <<165, 213, 202, 158, 4, 207, 93, 181, 144, 183, 20, 186, 47, 227, 44, 177, 89, 19, 63, 193, 193, 146, 183, 34, 87, 253, 7, 211, 156, 176, 64, 30>>, signer?: false, writable?: false},
-        %Solana.Account{key: <<172, 26, 227, 208, 135, 242, 146, 55, 6, 37, 72, 247, 12, 76, 4, 174, 194, 169, 149, 105, 73, 134, 231, 203, 180, 103, 82, 6, 33, 211, 134, 48>>, signer?: false, writable?: false},
-        %Solana.Account{key: <<129, 110, 102, 99, 12, 59, 183, 36, 220, 89, 228, 159, 108, 196, 48, 110, 96, 58, 106, 172, 202, 6, 250, 62, 52, 226, 180, 10, 213, 151, 157, 141>>, signer?: false, writable?: false},
-        %Solana.Account{key: <<207, 203, 8, 151, 194, 123, 207, 219, 94, 70, 212, 157, 3, 63, 89, 219, 154, 139, 82, 135, 188, 30, 27, 240, 126, 237, 19, 165, 131, 125, 225, 43>>, signer?: false, writable?: true},
-        %Solana.Account{key: <<119, 4, 122, 56, 28, 57, 21, 56, 247, 163, 186, 66, 186, 254, 132, 29, 69, 63, 38, 213, 46, 113, 166, 100, 67, 246, 175, 30, 221, 116, 138, 253>>, signer?: false, writable?: true},
-        %Solana.Account{key: <<192, 167, 138, 134, 184, 31, 163, 35, 58, 223, 152, 137, 51, 153, 8, 181, 110, 185, 71, 12, 49, 170, 181, 196, 176, 231, 195, 59, 252, 139, 49, 191>>, signer?: false, writable?: true},
-        %Solana.Account{key: <<116, 245, 164, 170, 0, 132, 225, 50, 247, 14, 91, 158, 64, 0, 213, 6, 56, 133, 176, 216, 85, 64, 74, 224, 192, 2, 74, 88, 79, 122, 189, 144>>, signer?: false, writable?: true},
-        %Solana.Account{key: <<183, 232, 49, 52, 52, 169, 139, 185, 211, 63, 99, 233, 10, 231, 34, 72, 3, 208, 152, 39, 205, 97, 164, 35, 236, 33, 202, 0, 46, 18, 174, 20>>, signer?: false, writable?: true},
-        %Solana.Account{key: <<201, 70, 214, 133, 104, 36, 159, 20, 101, 195, 17, 22, 18, 3, 88, 111, 153, 96, 40, 39, 46, 48, 53, 70, 224, 172, 121, 205, 214, 219, 147, 36>>, signer?: false, writable?: true},
-        %Solana.Account{key: <<6, 221, 246, 225, 215, 101, 161, 147, 217, 203, 225, 70, 206, 235, 121, 172, 28, 180, 133, 237, 95, 91, 55, 145, 58, 140, 245, 133, 126, 255, 0, 169>>, signer?: false, writable?: false},
-        %Solana.Account{key: <<83, 209, 195, 39, 130, 109, 174, 222, 124, 7, 26, 10, 226, 100, 184, 249, 223, 160, 208, 66, 8, 208, 101, 46, 242, 83, 97, 165, 250, 220, 130, 224>>, signer?: false, writable?: true},
-        %Solana.Account{key: <<21, 181, 245, 117, 230, 85, 75, 118, 14, 137, 190, 46, 91, 7, 63, 83, 32, 146, 139, 224, 109, 7, 162, 169, 84, 27, 20, 113, 107, 112, 13, 150>>, signer?: false, writable?: true},
-        %Solana.Account{key: <<218, 235, 38, 89, 10, 254, 13, 74, 78, 84, 18, 103, 20, 101, 121, 18, 209, 60, 224, 7, 203, 254, 120, 88, 237, 217, 126, 105, 241, 78, 100, 126>>, signer?: false, writable?: true},
-        %Solana.Account{key: <<133, 22, 168, 163, 240, 97, 48, 42, 39, 31, 114, 250, 205, 29, 225, 135, 51, 26, 25, 149, 30, 98, 9, 50, 52, 83, 207, 208, 244, 171, 111, 54>>, signer?: false, writable?: true},
-        %Solana.Account{key: <<4, 121, 213, 91, 242, 49, 192, 110, 238, 116, 197, 110, 206, 104, 21, 7, 253, 177, 178, 222, 163, 244, 142, 81, 2, 177, 205, 162, 86, 188, 19, 143>>, signer?: false, writable?: false}
-      ]
-      # Exact address_table_lookups as provided (empty for this legacy example, but you can fill in if you have the binary structure)
-      address_table_lookups = [
-        %Solana.Transaction.AddressTableLookup{
-          account_key: B58.decode58("9AKCoNoAGYLW71TwTHY9e7KrZUWWL3c7VtHKb66NT3EV"),
-          writable_indexes: [],
-          readonly_indexes: [0, 1, 2]
-        },
-        %Solana.Transaction.AddressTableLookup{
-          account_key: B58.decode58("DHX2A6WncCGUaPVMsZefarm8aPJNXvG2VSB621MkuwYF"),
-          writable_indexes: [0, 1],
-          readonly_indexes: []
-        }
-      ]
-      payer = <<157, 165, 172, 116, 127, 61, 108, 104, 47, 113, 145, 40, 116, 91, 205, 192, 14, 113, 164, 27, 39, 16, 199, 51, 122, 47, 136, 189, 117, 132, 203, 212>>
-      blockhash = <<110, 91, 81, 227, 215, 46, 41, 83, 233, 178, 37, 54, 65, 184, 214, 192, 168, 226, 161, 43, 163, 168, 92, 122, 33, 199, 208, 19, 127, 4, 117, 13>>
-      program = <<4, 121, 213, 91, 242, 49, 192, 110, 238, 116, 197, 110, 206, 104, 21, 7, 253, 177, 178, 222, 163, 244, 142, 81, 2, 177, 205, 162, 86, 188, 19, 143>>
+      instruction_data = Jason.decode!(File.read!("test/support/instructions.json"))
+
+      lookup_table_accounts =
+        Jason.decode!(File.read!("test/support/address_lookup_table_accounts.json"))
+        |> Enum.map(fn lookup ->
+          %{
+            key: lookup["key"],
+            state: %{addresses: lookup["state"]["addresses"]}
+          }
+        end)
+
+      # Extract swap instruction details
+      swap_ix = instruction_data["swapInstruction"]
+      program = Solana.pubkey(swap_ix["programId"]) |> elem(1)
+
+      # Map accounts for the instruction
+      accounts =
+        Enum.map(swap_ix["accounts"], fn account ->
+          %{
+            key: account["pubkey"],
+            writable?: account["isWritable"]
+          }
+        end)
+
+      # Create the instruction
       ix = %Solana.Instruction{
-        data: <<193, 32, 155, 51, 65, 214, 156, 129, 5, 2, 0, 0, 0, 61, 1, 100, 0, 1, 26, 100, 1, 2, 64, 75, 76, 0, 0, 0, 0, 0, 226, 94, 215, 1, 0, 0, 0, 0, 50, 0, 0>>,
+        data: Base.decode64!(swap_ix["data"]),
         program: program,
-        accounts: accounts
+        accounts:
+          Enum.map(accounts, fn %{key: k, writable?: w} ->
+            {:ok, key} = Solana.pubkey(k)
+            %Solana.Account{key: key, writable?: w, signer?: false}
+          end)
       }
+
+      blockhash = instruction_data["blockhashWithMetadata"]["blockhash"] |> :binary.list_to_bin()
+      payer = Solana.pubkey!("11111111111111111111111111111112")
+
+       compiled_keys = Transaction.compile_keys([ix], payer)
+       {address_table_lookups, account_keys_from_lookups, updated_compiled_keys} = Transaction.process_address_lookup_tables(lookup_table_accounts, compiled_keys)
+       {header, static_account_keys} = Transaction.get_message_components(updated_compiled_keys)
+       message_account_keys = Transaction.build_message_account_keys(static_account_keys, account_keys_from_lookups)
+       compiled_instructions = Transaction.compile_instructions_v0([ix], message_account_keys)
+      message = Transaction.build_message_v0(header, static_account_keys, blockhash, compiled_instructions, address_table_lookups)
+      encoded_message = Transaction.encode_message(message)
+
+      assert Base.encode16(encoded_message, case: :lower) == reference_bin()
+
       tx = %Solana.Transaction{
         payer: payer,
         blockhash: blockhash,
         instructions: [ix],
-        signers: [{<<2, 179, 26, 93, 179, 211, 156, 0, 136, 117, 19, 36, 211, 236, 61, 190, 21, 200, 68, 53, 122, 24, 71, 33, 13, 186, 167, 196, 210, 207, 34, 117>>, payer}],
+        signers: [{:crypto.strong_rand_bytes(64), payer}],
         version: 1,
-        address_table_lookups: address_table_lookups
+        address_table_lookups: lookup_table_accounts
       }
+
       {:ok, bin} = Solana.Transaction.to_binary(tx)
+      dbg(bin, limit: :infinity)
+      dbg(byte_size(bin))
       assert byte_size(bin) < 1232
     end
 
     test "v0 transaction builds address_table_lookups automatically and encodes < 1232 bytes" do
-      # Example lookup table addresses (base58)
       lookup_table_addresses = [
         "9AKCoNoAGYLW71TwTHY9e7KrZUWWL3c7VtHKb66NT3EV",
         "DHX2A6WncCGUaPVMsZefarm8aPJNXvG2VSB621MkuwYF"
       ]
-      # Example lookup table contents (base58 pubkeys)
+
       lookup_table_accounts = [
         %{
           address: "9AKCoNoAGYLW71TwTHY9e7KrZUWWL3c7VtHKb66NT3EV",
@@ -341,6 +335,7 @@ defmodule Solana.TransactionTest do
           ]
         }
       ]
+
       # Example accounts (some from lookup tables, some static)
       accounts = [
         %{key: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", writable?: false},
@@ -348,19 +343,35 @@ defmodule Solana.TransactionTest do
         %{key: "BcPXor1Jb2XaHcyuQdnTN4ZVSKq5hq5JS892jBc4d8jd", writable?: true},
         %{key: "DLXpJDG8fLZ554x8LVP3uSoNQQgdo3JtkiVSQ21YdjEJ", writable?: true},
         %{key: "7u7cD7NxcZEuzRCBaYo8uVpotRdqZwez47vvuwzCov43", writable?: true},
-        %{key: "Sysvar1nstructions1111111111111111111111111", writable?: false} # static
+        # static
+        %{key: "Sysvar1nstructions1111111111111111111111111", writable?: false}
       ]
+
       # Use the helper to build address_table_lookups
-      address_table_lookups = Solana.AddressTableHelper.build_address_table_lookups(accounts, lookup_table_accounts)
+      address_table_lookups =
+        Solana.AddressTableHelper.build_address_table_lookups(accounts, lookup_table_accounts)
+
       # Build a v0 transaction
-      payer = B58.decode58("BcPXor1Jb2XaHcyuQdnTN4ZVSKq5hq5JS892jBc4d8jd")
-      blockhash = <<229, 201, 98, 32, 6, 39, 168, 197, 110, 211, 36, 122, 192, 138, 190, 221, 117, 247, 157, 221, 236, 99, 232, 98, 192, 55, 64, 27, 113, 40, 75, 130>>
-      program = B58.decode58("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4")
+      {:ok, payer} = Solana.pubkey("BcPXor1Jb2XaHcyuQdnTN4ZVSKq5hq5JS892jBc4d8jd")
+
+      blockhash =
+        <<229, 201, 98, 32, 6, 39, 168, 197, 110, 211, 36, 122, 192, 138, 190, 221, 117, 247, 157,
+          221, 236, 99, 232, 98, 192, 55, 64, 27, 113, 40, 75, 130>>
+
+      {:ok, program} = Solana.pubkey("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4")
+
       ix = %Solana.Instruction{
-        data: <<193, 32, 155, 51, 65, 214, 156, 129, 5, 2, 0, 0, 0, 61, 1, 100, 0, 1, 26, 100, 1, 2, 64, 75, 76, 0, 0, 0, 0, 0, 226, 94, 215, 1, 0, 0, 0, 0, 50, 0, 0>>,
+        data:
+          <<193, 32, 155, 51, 65, 214, 156, 129, 5, 2, 0, 0, 0, 61, 1, 100, 0, 1, 26, 100, 1, 2,
+            64, 75, 76, 0, 0, 0, 0, 0, 226, 94, 215, 1, 0, 0, 0, 0, 50, 0, 0>>,
         program: program,
-        accounts: Enum.map(accounts, fn %{key: k, writable?: w} -> %Solana.Account{key: B58.decode58(k), writable?: w, signer?: false} end)
+        accounts:
+          Enum.map(accounts, fn %{key: k, writable?: w} ->
+            {:ok, key} = Solana.pubkey(k)
+            %Solana.Account{key: key, writable?: w, signer?: false}
+          end)
       }
+
       tx = %Solana.Transaction{
         payer: payer,
         blockhash: blockhash,
@@ -369,6 +380,7 @@ defmodule Solana.TransactionTest do
         version: 1,
         address_table_lookups: address_table_lookups
       }
+
       {:ok, bin} = Solana.Transaction.to_binary(tx)
       assert byte_size(bin) < 1232
     end
@@ -508,10 +520,12 @@ defmodule Solana.TransactionTest do
       payer = Solana.keypair()
       blockhash = Solana.keypair() |> Solana.pubkey!()
       program = Solana.keypair() |> Solana.pubkey!()
+
       ix = %Instruction{
         program: program,
         accounts: [%Account{key: Solana.pubkey!(payer), writable?: true, signer?: true}]
       }
+
       tx = %Transaction{
         payer: Solana.pubkey!(payer),
         instructions: [ix],
@@ -519,6 +533,7 @@ defmodule Solana.TransactionTest do
         signers: [payer],
         version: 1
       }
+
       assert {:ok, bin} = Transaction.to_binary(tx)
       assert is_binary(bin)
       assert :binary.first(bin) == 0x80
@@ -526,7 +541,10 @@ defmodule Solana.TransactionTest do
 
     test "parse/1 returns :error for versioned tx binary stub" do
       # 0x80 is the version prefix for v0 versioned transactions
-      versioned_bin = <<0x80, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31>>
+      versioned_bin =
+        <<0x80, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+          23, 24, 25, 26, 27, 28, 29, 30, 31>>
+
       assert Transaction.parse(versioned_bin) == :error
     end
 
@@ -534,10 +552,12 @@ defmodule Solana.TransactionTest do
       payer = Solana.keypair()
       blockhash = Solana.keypair() |> Solana.pubkey!()
       program = Solana.keypair() |> Solana.pubkey!()
+
       ix = %Instruction{
         program: program,
         accounts: [%Account{key: Solana.pubkey!(payer), writable?: true, signer?: true}]
       }
+
       tx = %Transaction{
         payer: Solana.pubkey!(payer),
         instructions: [ix],
@@ -545,6 +565,7 @@ defmodule Solana.TransactionTest do
         signers: [payer],
         version: 1
       }
+
       assert {:ok, bin} = Transaction.to_binary(tx)
       assert {parsed, extras} = Transaction.parse(bin)
       assert parsed.version == 1
@@ -562,6 +583,7 @@ defmodule Solana.TransactionTest do
       program_key = :crypto.strong_rand_bytes(32)
       lookup_table_pubkey = :crypto.strong_rand_bytes(32)
       lookup_key = :crypto.strong_rand_bytes(32)
+
       ix = %Instruction{
         program: program_key,
         accounts: [
@@ -569,11 +591,13 @@ defmodule Solana.TransactionTest do
           %Account{key: lookup_key, writable?: false, signer?: false}
         ]
       }
+
       lookup = %Transaction.AddressTableLookup{
         account_key: lookup_table_pubkey,
         writable_indexes: [],
         readonly_indexes: [0]
       }
+
       tx = %Transaction{
         payer: payer_key,
         instructions: [ix],
@@ -582,6 +606,7 @@ defmodule Solana.TransactionTest do
         version: 1,
         address_table_lookups: [lookup]
       }
+
       assert {:ok, bin} = Transaction.to_binary(tx)
       assert {parsed, extras} = Transaction.parse(bin)
       assert parsed.version == 1
@@ -597,7 +622,10 @@ defmodule Solana.TransactionTest do
       |> Mox.expect(:send, fn _rpc_url, req ->
         assert {"getAccountInfo", [_, %{"encoding" => "base64"}]} = req
 
-        data = :crypto.strong_rand_bytes(32) <> :crypto.strong_rand_bytes(8) <> <<1::little-32>> <> lookup_key
+        data =
+          :crypto.strong_rand_bytes(32) <>
+            :crypto.strong_rand_bytes(8) <> <<1::little-32>> <> lookup_key
+
         b64 = Base.encode64(data)
         {:ok, %{body: [%{"result" => %{"value" => %{"data" => [b64, "base64"]}}}]}}
       end)
@@ -607,6 +635,7 @@ defmodule Solana.TransactionTest do
       _program = Solana.keypair() |> Solana.pubkey!()
       payer_key = :crypto.strong_rand_bytes(32)
       program_key = :crypto.strong_rand_bytes(32)
+
       ix = %Instruction{
         program: program_key,
         accounts: [
@@ -614,11 +643,13 @@ defmodule Solana.TransactionTest do
           %Account{key: lookup_key, writable?: false, signer?: false}
         ]
       }
+
       lookup = %Transaction.AddressTableLookup{
         account_key: lookup_table_pubkey,
         writable_indexes: [],
         readonly_indexes: [0]
       }
+
       tx = %Transaction{
         payer: payer_key,
         instructions: [ix],
@@ -627,10 +658,11 @@ defmodule Solana.TransactionTest do
         version: 1,
         address_table_lookups: [lookup]
       }
+
       # Encode the transaction
       {:ok, bin} = Transaction.to_binary(tx)
       # Use parse_with_lookup, which should trigger the Mox expect
-      {parsed, extras} = Transaction.parse_with_lookup(bin, "mock-url", &Solana.RPC.Mock.send/2)
+      {parsed, extras} = Transaction.parse_with_lookup(bin, "mock-url")
       # The full account list should include the static and lookup key
       assert Enum.any?(Keyword.get(extras, :accounts), &(&1 == lookup_key))
       # The instruction should reference the lookup key
@@ -656,11 +688,15 @@ defmodule Solana.TransactionTest do
           %Account{key: lookup_key2, writable?: true, signer?: false}
         ]
       }
+
       lookup = %Transaction.AddressTableLookup{
         account_key: lookup_table_pubkey,
-        writable_indexes: [1], # lookup_key2
-        readonly_indexes: [0]  # lookup_key1
+        # lookup_key2
+        writable_indexes: [1],
+        # lookup_key1
+        readonly_indexes: [0]
       }
+
       tx = %Transaction{
         payer: payer_key,
         instructions: [ix],
@@ -669,12 +705,13 @@ defmodule Solana.TransactionTest do
         version: 1,
         address_table_lookups: [lookup]
       }
+
       assert {:ok, bin} = Transaction.to_binary(tx)
-      dbg(bin)
       assert {parsed, extras} = Transaction.parse(bin)
       # Compression checks
       accounts = Keyword.get(extras, :accounts)
-      static_accounts = Enum.take(accounts, 3) # payer, program, (maybe more if not in ALT)
+      # payer, program, (maybe more if not in ALT)
+      static_accounts = Enum.take(accounts, 3)
       alt_accounts = Enum.drop(accounts, 3)
       # Static accounts should include payer and program, not ALT keys
       assert Enum.any?(static_accounts, &(&1 == payer_key))
@@ -714,16 +751,21 @@ defmodule Solana.TransactionTest do
           %Account{key: alt2_key, writable?: false, signer?: false}
         ]
       }
+
       lookup1 = %Transaction.AddressTableLookup{
         account_key: alt1_pubkey,
         writable_indexes: [],
-        readonly_indexes: [0, 1] # shared_key, alt1_key
+        # shared_key, alt1_key
+        readonly_indexes: [0, 1]
       }
+
       lookup2 = %Transaction.AddressTableLookup{
         account_key: alt2_pubkey,
         writable_indexes: [],
-        readonly_indexes: [0, 1] # shared_key, alt2_key
+        # shared_key, alt2_key
+        readonly_indexes: [0, 1]
       }
+
       tx = %Transaction{
         payer: payer_key,
         instructions: [ix],
@@ -732,6 +774,7 @@ defmodule Solana.TransactionTest do
         version: 1,
         address_table_lookups: [lookup1, lookup2]
       }
+
       assert {:ok, bin} = Transaction.to_binary(tx)
       assert {parsed, extras} = Transaction.parse(bin)
       accounts = Keyword.get(extras, :accounts)
@@ -754,5 +797,41 @@ defmodule Solana.TransactionTest do
       ix_parsed = List.first(parsed.instructions)
       assert Enum.map(ix_parsed.accounts, & &1.key) == [payer_key, shared_key, alt1_key, alt2_key]
     end
+  end
+
+  defp reference_bin do
+    Base.encode16(<<128, 1, 0, 5, 12, 126, 197, 119, 48, 59, 129, 9, 85, 192, 221, 241, 170, 158, 140, 12, 244,
+      158, 232, 48, 221, 117, 175, 130, 101, 176, 65, 247, 174, 54, 121, 56, 245, 219, 237, 142,
+      191, 91, 190, 152, 61, 82, 26, 140, 5, 78, 105, 139, 150, 172, 22, 210, 1, 184, 114, 24, 84,
+      240, 112, 218, 191, 67, 134, 2, 167, 88, 239, 103, 127, 181, 99, 94, 100, 115, 114, 75, 112,
+      225, 107, 100, 5, 84, 3, 78, 164, 122, 28, 123, 63, 205, 136, 133, 60, 65, 93, 50, 84, 231,
+      227, 72, 142, 86, 218, 198, 109, 211, 196, 228, 6, 133, 61, 42, 122, 144, 97, 208, 154, 127,
+      168, 243, 247, 226, 146, 191, 178, 73, 149, 131, 21, 217, 175, 13, 57, 224, 125, 63, 12,
+      176, 13, 21, 41, 121, 7, 185, 119, 246, 155, 132, 158, 237, 37, 43, 200, 226, 101, 246, 31,
+      65, 203, 47, 166, 11, 72, 7, 79, 117, 184, 234, 48, 105, 201, 237, 63, 6, 188, 50, 25, 120,
+      42, 228, 205, 142, 92, 157, 55, 73, 130, 86, 177, 152, 75, 157, 80, 3, 175, 245, 229, 169,
+      43, 125, 251, 114, 27, 231, 43, 212, 81, 245, 66, 23, 164, 216, 134, 200, 24, 200, 143, 243,
+      24, 145, 123, 254, 181, 18, 254, 4, 121, 213, 91, 242, 49, 192, 110, 238, 116, 197, 110,
+      206, 104, 21, 7, 253, 177, 178, 222, 163, 244, 142, 81, 2, 177, 205, 162, 86, 188, 19, 143,
+      58, 184, 144, 63, 183, 53, 202, 177, 198, 124, 89, 175, 72, 87, 237, 246, 27, 10, 248, 50,
+      165, 10, 124, 89, 227, 33, 145, 158, 14, 200, 169, 188, 180, 63, 250, 39, 245, 215, 246, 74,
+      116, 192, 155, 31, 41, 88, 121, 222, 75, 9, 171, 54, 223, 201, 221, 81, 75, 50, 26, 167,
+      179, 140, 229, 232, 231, 74, 217, 108, 227, 101, 159, 211, 19, 81, 0, 40, 75, 247, 120, 4,
+      91, 133, 16, 168, 243, 78, 73, 140, 146, 46, 238, 111, 195, 5, 248, 105, 82, 97, 209, 74,
+      172, 197, 188, 14, 236, 99, 93, 168, 112, 90, 31, 112, 163, 158, 227, 90, 154, 207, 11, 248,
+      242, 44, 198, 206, 73, 1, 157, 122, 65, 159, 89, 55, 201, 69, 203, 4, 134, 223, 42, 119, 66,
+      241, 54, 89, 107, 63, 236, 120, 144, 98, 51, 42, 62, 104, 117, 123, 108, 234, 146, 121, 1,
+      7, 65, 27, 8, 0, 1, 2, 3, 4, 28, 32, 7, 7, 9, 7, 47, 23, 10, 11, 24, 25, 2, 5, 26, 48, 49,
+      8, 27, 29, 27, 8, 12, 5, 13, 6, 14, 15, 16, 17, 30, 33, 8, 31, 32, 6, 3, 18, 27, 27, 19, 20,
+      21, 22, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 7, 56, 193, 32, 155, 51, 65,
+      214, 156, 129, 4, 3, 0, 0, 0, 58, 1, 100, 0, 1, 17, 1, 100, 1, 2, 43, 5, 5, 12, 0, 0, 0, 21,
+      0, 0, 0, 100, 2, 3, 232, 3, 0, 0, 0, 0, 0, 0, 126, 3, 0, 0, 0, 0, 0, 0, 50, 0, 0, 3, 148,
+      187, 197, 83, 10, 200, 93, 65, 98, 63, 228, 114, 107, 167, 57, 236, 61, 208, 255, 46, 172,
+      134, 73, 247, 1, 127, 41, 22, 180, 225, 190, 168, 6, 238, 235, 233, 242, 237, 241, 5, 10, 0,
+      9, 236, 70, 182, 110, 133, 91, 242, 147, 203, 71, 129, 251, 209, 206, 35, 119, 82, 233, 192,
+      19, 33, 111, 188, 104, 229, 31, 69, 225, 9, 110, 182, 129, 177, 254, 5, 193, 24, 7, 47, 61,
+      15, 2, 213, 198, 117, 5, 113, 14, 201, 124, 101, 104, 106, 67, 1, 135, 243, 115, 121, 214,
+      132, 181, 161, 116, 229, 153, 34, 225, 57, 106, 151, 46, 52, 23, 15, 209, 14, 0, 75, 243,
+      145, 168, 29, 103, 61, 186, 51, 240, 4, 12, 18, 13, 11, 3, 15, 14, 16>>, case: :lower)
   end
 end

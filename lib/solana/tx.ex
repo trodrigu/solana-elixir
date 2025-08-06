@@ -5,6 +5,7 @@ defmodule Solana.Transaction do
   """
   require Logger
   alias Solana.{Account, CompactArray, Instruction}
+  alias Solana.KeyMeta
 
   defmodule AddressTableLookup do
     @moduledoc """
@@ -17,6 +18,25 @@ defmodule Solana.Transaction do
       :account_key,
       writable_indexes: [],
       readonly_indexes: []
+    ]
+  end
+
+  defmodule CompiledKeys do
+    @moduledoc """
+    Holds the compiled key information for v0 transactions.
+    """
+    defstruct [
+      :payer,
+      :static_accounts,
+      :account_lookup_map
+    ]
+  end
+
+  defmodule MessageHeader do
+    defstruct [
+      num_required_signatures: 0,
+      num_readonly_signed_accounts: 0,
+      num_readonly_unsigned_accounts: 0
     ]
   end
 
@@ -66,9 +86,8 @@ defmodule Solana.Transaction do
   """
   @spec decode(encoded :: binary) :: {:ok, binary} | {:error, binary}
   def decode(encoded) when is_binary(encoded) do
-    case B58.decode58(encoded) do
-      {:ok, decoded} -> check(decoded)
-      _ -> {:error, "invalid signature"}
+    case decode58!(encoded) do
+      decoded -> check(decoded)
     end
   end
 
@@ -110,17 +129,30 @@ defmodule Solana.Transaction do
   """
   @spec to_binary(tx :: t) :: {:ok, binary()} | {:error, encoding_err()}
   def to_binary(%__MODULE__{version: 0} = tx), do: to_binary_legacy(tx)
-  def to_binary(%__MODULE__{version: 1, address_table_lookups: lookups} = tx) do
+  def to_binary(%__MODULE__{version: 1, address_table_lookups: lookup_table_accounts} = tx) do
     with {:ok, ixs} <- check_instructions(List.flatten(tx.instructions)),
-         accounts = compile_accounts(ixs, tx.payer),
-         true <- signers_match?(accounts, tx.signers) do
-      message = encode_message_v0(accounts, tx.blockhash, ixs, lookups)
+         dbg(Enum.count(ixs)),
+         compiled_keys = compile_keys(ixs, tx.payer),
+         {address_table_lookups, account_keys_from_lookups, updated_compiled_keys} = process_address_lookup_tables(lookup_table_accounts, compiled_keys),
+         {header, static_account_keys} = get_message_components(updated_compiled_keys),
+         # TODO: create key_segments from this and pass below!
+         message_account_keys = build_message_account_keys(static_account_keys, account_keys_from_lookups),
+         compiled_instructions = compile_instructions_v0(ixs, message_account_keys),
+         true <- signers_match?(updated_compiled_keys, tx.signers) do
+      # key_segments should have all static_account_keys and writable and readonly keys from lookups
+      message = build_message_v0(header, static_account_keys, tx.blockhash, compiled_instructions, address_table_lookups)
+      encoded_message = encode_message(message)
       signatures =
         tx.signers
-        |> reorder_signers(accounts)
-        |> Enum.map(&sign(&1, message))
+        |> reorder_signers(updated_compiled_keys)
+        |> Enum.map(&sign(&1, encoded_message))
         |> CompactArray.to_iolist()
-      {:ok, :erlang.list_to_binary([[0x80], signatures, message])}
+
+      IO.puts("Hex dump: " <> Base.encode16(encoded_message, case: :lower))
+      dbg(encoded_message, limit: :infinity)
+
+      binary = :erlang.list_to_binary([signatures, encoded_message]) 
+      {:ok, binary}
     else
       {:error, :no_program, idx} ->
         Logger.error("Missing program id on instruction at index #{idx}")
@@ -131,6 +163,35 @@ defmodule Solana.Transaction do
       false ->
         {:error, :mismatched_signers}
     end
+  end
+
+  def encode_message(message) do
+    static_account_keys_binary = 
+      Enum.map(message.static_account_keys, fn key -> 
+        {:ok, binary} = B58.decode58(key)
+        binary |> :erlang.binary_to_list()
+      end)
+    header = encode_message_v0_header(message.header) |> dbg()
+    CompactArray.to_iolist(header) |> :erlang.list_to_binary() |> Base.encode16(case: :lower)
+
+    [
+      [0x80],
+      header,
+      CompactArray.to_iolist(static_account_keys_binary),
+      message.blockhash |> :erlang.binary_to_list(),
+      encode_address_table_lookups(message.address_table_lookups),
+      encode_instructions(message.compiled_instructions)
+    ]
+    |> dbg()
+    |> :erlang.list_to_binary()
+  end
+
+  defp encode_message_v0_header(header) do
+    [
+      header.num_required_signatures,
+      header.num_readonly_signed_accounts,
+      header.num_readonly_unsigned_accounts
+    ]
   end
 
   def check_instructions(ixs) do
@@ -156,33 +217,31 @@ defmodule Solana.Transaction do
 
   defp cons(list, item), do: [item | list]
 
-  defp signers_match?(accounts, signers) do
-    expected = MapSet.new(Enum.map(signers, &elem(&1, 1)))
+  defp signers_match?(compiled_keys, signers) do
+    expected = 
+      signers
+      |> Enum.map(&elem(&1, 1))
+      |> Enum.map(&B58.encode58/1)
+      |> MapSet.new()
 
-    accounts
-    |> Enum.filter(& &1.signer?)
-    |> Enum.map(& &1.key)
+    compiled_keys.key_meta
+    |> Enum.filter(fn {_, v} -> v.signer? end)
+    |> Enum.map(fn {k, _} -> k end)
     |> MapSet.new()
     |> MapSet.equal?(expected)
   end
 
-  # https://docs.solana.com/developing/programming-model/transactions#message-format
-  defp encode_message_v0(accounts, blockhash, ixs, lookups) do
-    [
-      create_header(accounts),
-      CompactArray.to_iolist(Enum.map(accounts, & &1.key)),
-      blockhash |> :erlang.binary_to_list(),
-      encode_address_table_lookups(lookups),
-      CompactArray.to_iolist(encode_instructions(ixs, accounts))
-    ]
-    |> :erlang.list_to_binary()
-  end
-
-  defp encode_address_table_lookups([]), do: CompactArray.to_iolist([])
+  defp encode_address_table_lookups(lookups) when length(lookups) == 0, do: CompactArray.to_iolist([])
   defp encode_address_table_lookups(lookups) do
     [CompactArray.encode_length(length(lookups)) |
-      Enum.flat_map(lookups, fn %AddressTableLookup{account_key: key, writable_indexes: w, readonly_indexes: r} ->
-        [key, CompactArray.to_iolist(w), CompactArray.to_iolist(r)]
+      Enum.flat_map(lookups, fn  %{
+          address_table_lookup: %{
+            account_key: account_key,
+            writable_indexes: w,
+            readonly_indexes: r
+          }
+        } ->
+        [account_key, CompactArray.to_iolist(w), CompactArray.to_iolist(r)]
       end)
     ]
   end
@@ -200,23 +259,29 @@ defmodule Solana.Transaction do
     )
     |> Tuple.to_list()
   end
+  # https://docs.solana.com/developing/programming-model/transactions#message-header-format
+  defp create_header(writable_signers, readonly_signers, readonly_non_signers) do
+    %{num_required_signatures: Enum.count(writable_signers) + Enum.count(readonly_signers),
+      num_readonly_signed_accounts: Enum.count(readonly_signers),
+      num_readonly_unsigned_accounts: Enum.count(readonly_non_signers)}
+  end
 
   defp unary(result?), do: if(result?, do: 1, else: 0)
 
   # https://docs.solana.com/developing/programming-model/transactions#instruction-format
-  defp encode_instructions(ixs, accounts) do
-    idxs = index_accounts(accounts)
-
-    Enum.map(ixs, fn ix = %Instruction{} ->
+  defp encode_instructions(ixs) do
+    dbg(ixs)
+    Enum.map(ixs, fn ix ->
       [
-        Map.get(idxs, ix.program),
-        CompactArray.to_iolist(Enum.map(ix.accounts, &Map.get(idxs, &1.key))),
+        ix.program_idx,
+        CompactArray.to_iolist(ix.account_indices),
         CompactArray.to_iolist(ix.data)
       ]
     end)
   end
 
   defp reorder_signers(signers, accounts) do
+    accounts = Map.values(accounts.key_meta)
     account_idxs = index_accounts(accounts)
     Enum.sort_by(signers, &Map.get(account_idxs, elem(&1, 1)))
   end
@@ -226,6 +291,201 @@ defmodule Solana.Transaction do
   end
 
   defp sign({secret, pk}, message), do: Ed25519.signature(message, secret, pk)
+
+  def compile_keys(instructions, payer) do
+    get_or_insert_default = fn pubkey, key_meta_map ->
+      address = B58.encode58(pubkey)
+      if _key_meta = Map.get(key_meta_map, address) do
+        key_meta_map
+      else
+        key_meta_map
+        |> Map.put(address,
+        %KeyMeta{
+          key: address,
+          signer?: false,
+          writable?: false,
+          invoked?: false
+        })
+      end
+    end
+
+    key_meta_map = 
+      get_or_insert_default.(payer, %{})
+      |> Map.update!(B58.encode58(payer), &%KeyMeta{key: &1.key, signer?: true, writable?: true})
+
+    final_key_meta_map =
+      for ix <- instructions, reduce: key_meta_map do
+        k ->
+          dbg(Enum.count(ix.accounts))
+          updated_key_meta_map = 
+            get_or_insert_default.(ix.program, k)
+            |> Map.update!(B58.encode58(ix.program), &%KeyMeta{key: &1.key, signer?: false, writable?: false, invoked?: true})
+
+          dbg(Enum.count(ix.accounts), label: "Accounts in instruction")
+
+          for a <- ix.accounts, reduce: updated_key_meta_map do
+            ki ->
+              ki
+              |> then(fn m ->
+                if Map.has_key?(m, B58.encode58(a.key)) do
+                  m
+                else
+                  a.key
+                  |> get_or_insert_default.(m)
+                  |> Map.update!(B58.encode58(a.key), &%KeyMeta{key: &1.key, signer?: a.signer?, writable?: a.writable?})
+                end
+              end)
+          end
+      end
+
+    #Map.values(final_key_meta_map)|>Enum.count()|>dbg()
+    %Solana.CompiledKeys{
+      payer: payer,
+      key_meta: final_key_meta_map
+    }
+  end
+
+  def process_address_lookup_tables(lookup_table_accounts, compiled_keys) do
+    {address_table_lookups, account_keys_from_lookups, updated_compiled_keys} = 
+      Enum.reduce(lookup_table_accounts, {[], %{writable: [], readonly: []}, compiled_keys}, fn lookup_table, {acc_lookups, %{writable: writable, readonly: readonly}, compiled_keys} ->
+        if table_lookup = extract_table_lookup(lookup_table, compiled_keys) do
+          updated_lookups = Enum.reverse([table_lookup | acc_lookups])
+
+          updated_writable = writable ++ table_lookup.keys_from_lookup.writable
+          updated_readonly = readonly ++ table_lookup.keys_from_lookup.readonly
+          {updated_lookups, %{writable: updated_writable, readonly: updated_readonly}, table_lookup.compiled_keys}
+        end
+      end)
+    
+    {address_table_lookups, account_keys_from_lookups, updated_compiled_keys}
+  end
+
+  defp extract_table_lookup(lookup_table, compiled_keys) do
+   dbg(lookup_table.state.addresses)
+    writable_meta_filter = fn meta -> not meta.signer? && not meta.invoked? && meta.writable? end
+
+    {writable_keys, writable_indexes, updated_compiled_keys} = get_keys_with_indexes(lookup_table, compiled_keys, writable_meta_filter)|>dbg()
+    dbg(Enum.any?(updated_compiled_keys.key_meta|>Map.keys(), & &1 == "FoWPDHUYhFmq5FaqoBUVLf5h5Y39yZRfLT3fy59uVMvv"))
+
+    readonly_meta_filter = fn meta -> not meta.signer? && not meta.invoked? && not meta.writable? end
+
+    {readonly_keys, readonly_indexes, updated_compiled_keys} = get_keys_with_indexes(lookup_table, updated_compiled_keys, readonly_meta_filter)
+
+    %{address_table_lookup: %{account_key: lookup_table.key,
+                             writable_indexes: writable_indexes,
+                             readonly_indexes: readonly_indexes},
+      keys_from_lookup: %{writable: writable_keys, readonly: readonly_keys}, 
+      compiled_keys: updated_compiled_keys}
+  end
+
+  defp get_keys_with_indexes(lookup_table, compiled_keys, key_meta_filter) do
+    filtered_keys =
+      compiled_keys.key_meta
+      |> Enum.filter(fn {_key, meta} -> 
+        key_meta_filter.(meta)
+      end)
+      |> Enum.map(fn {key, _meta} -> key end)
+
+    addresses = lookup_table.state.addresses
+
+    dbg(filtered_keys, label: "Filtered keys")
+
+    {keys_with_indexes, indexes} =
+      Enum.reduce(filtered_keys, {[], []}, fn k, {keys_with_indexes, indexes} ->
+        dbg(k)
+        if index = Enum.find_index(addresses, & &1 == k) do
+          dbg(addresses)
+          {Enum.reverse([k | keys_with_indexes]), 
+           Enum.reverse([index | indexes])}
+        else
+          {keys_with_indexes, indexes}
+        end
+      end)
+
+    dbg(keys_with_indexes)
+    dbg(indexes)
+    updated_key_meta = Map.drop(compiled_keys.key_meta, keys_with_indexes) |> dbg()
+    dbg(Enum.any?(compiled_keys.key_meta|>Map.keys(), & &1 == "sp1V4h2gWorkGhVcazBc22Hfo2f5sd7jcjT4EDPrWFF"))
+    updated_compiled_keys = %{compiled_keys | key_meta: updated_key_meta}
+    dbg(Enum.any?(updated_compiled_keys.key_meta|>Map.keys(), & &1 == "sp1V4h2gWorkGhVcazBc22Hfo2f5sd7jcjT4EDPrWFF"))
+
+    if Enum.any?(indexes, & &1 > 256), do: raise(ArgumentError, "Max lookup table index exceeded")
+
+    {keys_with_indexes, indexes, updated_compiled_keys}
+  end
+
+  def get_message_components(compiled_keys) do
+    dbg(Enum.count(compiled_keys.key_meta), label: "Total keys in compiled keys")
+    writable_signers = 
+      compiled_keys.key_meta
+      |> Enum.filter(fn {_key, meta} -> meta.signer? && meta.writable? end)
+      |> Enum.map(fn {key, _meta} -> key end)
+
+    readonly_signers =
+      compiled_keys.key_meta
+      |> Enum.filter(fn {_key, meta} -> meta.signer? && not meta.writable? end)
+      |> Enum.map(fn {key, _meta} -> key end)
+      |>dbg()
+
+    writable_non_signers =
+      compiled_keys.key_meta
+      |> Enum.filter(fn {_key, meta} -> not meta.signer? && meta.writable? end)
+      |> Enum.map(fn {key, _meta} -> key end)
+
+    readonly_non_signers =
+      compiled_keys.key_meta
+      |> Enum.filter(fn {_key, meta} -> not meta.signer? && not meta.writable? end)
+      |> Enum.map(fn {key, _meta} -> key end)
+
+    header = create_header(writable_signers, readonly_signers, readonly_non_signers)
+
+    static_account_keys =
+      writable_signers ++ readonly_signers ++ writable_non_signers ++ readonly_non_signers
+
+    {header, static_account_keys}
+  end
+
+  def build_message_account_keys(static_account_keys, account_keys_from_lookups) do
+    %{static_account_keys: static_account_keys,
+      account_keys_from_lookups: account_keys_from_lookups}
+  end
+
+  def compile_instructions_v0(instructions, message_account_keys) do
+    key_segments = message_account_keys.static_account_keys ++ 
+      message_account_keys.account_keys_from_lookups.writable ++
+      message_account_keys.account_keys_from_lookups.readonly
+      |>dbg()
+
+    Enum.map(instructions, fn ix ->
+      dbg(ix.program)
+      program_idx = Enum.find_index(key_segments, &(&1 == B58.encode58(ix.program)))
+      account_indices = Enum.map(ix.accounts, fn account -> 
+        Enum.find_index(key_segments, fn segment -> segment == B58.encode58(account.key) end)
+      end)
+      %{program_idx: program_idx, account_indices: account_indices, data: ix.data}
+    end)
+    |> dbg()
+  end
+
+  def build_message_v0(header, static_account_keys, blockhash, compiled_instructions, address_table_lookups) do
+    %{
+      header: header,
+      static_account_keys: static_account_keys,
+      blockhash: blockhash,
+      compiled_instructions: compiled_instructions,
+      address_table_lookups: address_table_lookups
+    }
+  end
+  #defp build_message_v0(header, static_account_keys, blockhash, instructions, address_table_lookups) do
+    #[
+      #header,
+      #CompactArray.to_iolist(Enum.map(static_account_keys, & &1.key)),
+      #blockhash |> :erlang.binary_to_list(),
+      #encode_address_table_lookups(address_table_lookups),
+      #CompactArray.to_iolist(instructions)
+    #]
+    #|> :erlang.list_to_binary()
+  #end
 
   @doc """
   Parses a `t:Solana.Transaction.t/0` from data encoded in Solana's [binary
@@ -393,7 +653,7 @@ defmodule Solana.Transaction do
       create_header(accounts),
       CompactArray.to_iolist(Enum.map(accounts, & &1.key)),
       blockhash |> :erlang.binary_to_list(),
-      CompactArray.to_iolist(encode_instructions(ixs, accounts))
+      CompactArray.to_iolist(encode_instructions(ixs))
     ]
     |> :erlang.list_to_binary()
   end
@@ -436,10 +696,9 @@ defmodule Solana.Transaction do
   Accepts:
     - encoded: the transaction binary
     - rpc_url: the Solana RPC endpoint
-    - fetch_fun: (optional) a function to fetch account info (defaults to Solana.RPC.send/2)
   Returns {transaction, extras} or :error
   """
-  def parse_with_lookup(encoded, rpc_url, fetch_fun \\ &Solana.RPC.send/2) do
+  def parse_with_lookup(encoded, rpc_url) do
     case encoded do
       <<0x80, rest::binary>> ->
         with {signatures, message, _} <- CompactArray.decode_and_split(rest, 64),
@@ -484,27 +743,32 @@ defmodule Solana.Transaction do
     end
   end
 
-  defp fetch_lookup_table_keys(table_pubkey, rpc_url) do
+  def fetch_lookup_table_keys(table_pubkey, rpc_url) do
     req = Solana.RPC.Request.get_account_info(table_pubkey, encoding: "base64")
     case rpc_client().send(rpc_url, req) do
-      {:ok, %{body: [%{"result" => %{"value" => %{"data" => [b64, "base64"]}}}]}} ->
+      {:ok, %{body: %{"result" => %{"value" => %{"data" => [b64, "base64"]}}}}} ->
         data = Base.decode64!(b64)
         parse_lookup_table_account_data(data)
       _ -> []
     end
   end
 
-  defp parse_lookup_table_account_data(data) do
-    # Address Lookup Table format:
-    # 32 bytes: authority
-    # 8 bytes: deactivation slot
-    # 4 bytes: key count (little-endian)
-    # N * 32 bytes: keys
-    <<_authority::binary-size(32), _deact_slot::binary-size(8), key_count::little-32, rest::binary>> = data
-    for <<key::binary-size(32) <- binary_part(rest, 0, key_count * 32)>>, do: key
+  def parse_lookup_table_account_data(data) do
+    # TODO: we need to parse the meta eventually
+    <<_meta::binary-size(56), rest::binary>> = data
+
+    for <<key::binary-size(32) <- rest>>, do: key
   end
 
   defp rpc_client do
-    Application.get_env(:solana, :rpc_client, Solana.Rpc)
+    Application.get_env(:solana, :rpc_client, Solana.RPC)
+  end
+
+  defp decode58!(s) do
+    case B58.decode58(s) do
+      {:ok, decoded} -> decoded
+      _ -> raise ArgumentError, "invalid base58 string"
+    end
   end
 end
+
