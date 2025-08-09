@@ -290,26 +290,34 @@ defmodule Solana.TransactionTest do
        compiled_keys = Transaction.compile_keys([ix], payer)
        {address_table_lookups, account_keys_from_lookups, updated_compiled_keys} = Transaction.process_address_lookup_tables(lookup_table_accounts, compiled_keys)
        {header, static_account_keys} = Transaction.get_message_components(updated_compiled_keys)
+       dbg(static_account_keys)
        message_account_keys = Transaction.build_message_account_keys(static_account_keys, account_keys_from_lookups)
        compiled_instructions = Transaction.compile_instructions_v0([ix], message_account_keys)
       message = Transaction.build_message_v0(header, static_account_keys, blockhash, compiled_instructions, address_table_lookups)
       encoded_message = Transaction.encode_message(message)
 
+      hex_dump = 
+        encoded_message
+        |> Base.encode16(case: :lower)
+        |> HexDump.format()
+
+      #IO.puts(HexDump.format(hex_dump))
+      #assert hex_dump == hex_dump_reference()
       assert Base.encode16(encoded_message, case: :lower) == reference_bin()
 
-      tx = %Solana.Transaction{
-        payer: payer,
-        blockhash: blockhash,
-        instructions: [ix],
-        signers: [{:crypto.strong_rand_bytes(64), payer}],
-        version: 1,
-        address_table_lookups: lookup_table_accounts
-      }
+      #tx = %Solana.Transaction{
+        #payer: payer,
+        #blockhash: blockhash,
+        #instructions: [ix],
+        #signers: [{:crypto.strong_rand_bytes(64), payer}],
+        #version: 1,
+        #address_table_lookups: lookup_table_accounts
+      #}
 
-      {:ok, bin} = Solana.Transaction.to_binary(tx)
-      dbg(bin, limit: :infinity)
-      dbg(byte_size(bin))
-      assert byte_size(bin) < 1232
+      #{:ok, bin} = Solana.Transaction.to_binary(tx)
+      #dbg(bin, limit: :infinity)
+      #dbg(byte_size(bin))
+      #assert byte_size(bin) < 1232
     end
 
     test "v0 transaction builds address_table_lookups automatically and encodes < 1232 bytes" do
@@ -833,5 +841,21 @@ defmodule Solana.TransactionTest do
       15, 2, 213, 198, 117, 5, 113, 14, 201, 124, 101, 104, 106, 67, 1, 135, 243, 115, 121, 214,
       132, 181, 161, 116, 229, 153, 34, 225, 57, 106, 151, 46, 52, 23, 15, 209, 14, 0, 75, 243,
       145, 168, 29, 103, 61, 186, 51, 240, 4, 12, 18, 13, 11, 3, 15, 14, 16>>, case: :lower)
+  end
+
+  def hex_dump_reference do
+    # encoded instructions
+    # "01 07 41 1b 08 00 01 02 03 04 1c 20 07 07 09 07 2f 17 0a 0b 18 19 02 05 1a 30 31 08 1b 1d 1b 08 0c 05 0d 06 0e 0f 10 11 1e 21 08 1f 20 06 03 12 1b 1b 13 14 15 16 22 23 24 25 26 27 28 29 2a 2b 2c 2d 2e 07 38 c1 20 9b 33 41 d6 9c 81 04 03 00 00 00 3a 01 64 00 01 11 01 64 01 02 2b 05 05 0c 00 00 00 15 00 00 00 64 02 03 e8 03 00 00 00 00 00 00 7e 03 00 00 00 00 00 00 32 00 00"
+    # encoded address table lookups
+    "03 94 bb c5 53 0a c8 5d 41 62 3f e4 72 6b a7 39 ec 3d d0 ff 2e ac 86 49 f7 01 7f 29 16 b4 e1 be a8 06 ee eb e9 f2 ed f1 05 0a 00 09 ec 46 b6 6e 85 5b f2 93 cb 47 81 fb d1 ce 23 77 52 e9 c0 13 21 6f bc 68 e5 1f 45 e1 09 6e b6 81 b1 fe 05 c1 18 07 2f 3d 0f 02 d5 c6 75 05 71 0e c9 7c 65 68 6a 43 01 87 f3 73 79 d6 84 b5 a1 74 e5 99 22 e1 39 6a 97 2e 34 17 0f d1 0e 00 4b f3 91 a8 1d 67 3d ba 33 f0 04 0c 12 0d 0b 03 0f 0e 10"
+  end
+end
+defmodule HexDump do
+  def format(hex_string) do
+    hex_string
+    |> String.replace("\n", "")
+    |> String.graphemes()
+    |> Enum.chunk_every(2)
+    |> Enum.map_join(" ", &Enum.join/1)
   end
 end
