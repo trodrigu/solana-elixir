@@ -37,7 +37,7 @@ defmodule Solana.AddressTableHelper do
             data = Base.decode64!(b64_data)
             
             %{
-              key: key,
+              key: B58.encode58(key),
               state: %{
                 addresses: parse_lookup_table_addresses(data),
                 authority: parse_lookup_table_authority(data),
@@ -128,14 +128,14 @@ defmodule Solana.AddressTableHelper do
   defp parse_lookup_table_addresses(data) do
     # Skip metadata (56 bytes) and parse addresses
     <<_meta::binary-size(56), rest::binary>> = data
-    for <<key::binary-size(32) <- rest>>, do: key
+    for <<key::binary-size(32) <- rest>>, do: B58.encode58(key)
   end
 
   defp parse_lookup_table_authority(data) do
     # Authority is at offset 8-40 in the metadata
     <<_::binary-size(8), authority::binary-size(32), _::binary>> = data
     # Check if authority is all zeros (null)
-    if authority == <<0::256>>, do: nil, else: authority
+    if authority == <<0::256>>, do: nil, else: B58.encode58(authority)
   end
 
   defp parse_lookup_table_deactivation_slot(data) do
