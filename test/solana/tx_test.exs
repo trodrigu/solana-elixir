@@ -9,7 +9,6 @@ defmodule Solana.TransactionTest do
   setup :verify_on_exit!
 
   alias Solana.{Transaction, Instruction, Account}
-  alias Solana.AddressTableHelper
 
   describe "to_binary/1" do
     test "fails if there's no blockhash" do
@@ -290,42 +289,28 @@ defmodule Solana.TransactionTest do
        compiled_keys = Transaction.compile_keys([ix], payer)
        {address_table_lookups, account_keys_from_lookups, updated_compiled_keys} = Transaction.process_address_lookup_tables(lookup_table_accounts, compiled_keys)
        {header, static_account_keys} = Transaction.get_message_components(updated_compiled_keys)
-       dbg(static_account_keys)
        message_account_keys = Transaction.build_message_account_keys(static_account_keys, account_keys_from_lookups)
        compiled_instructions = Transaction.compile_instructions_v0([ix], message_account_keys)
       message = Transaction.build_message_v0(header, static_account_keys, blockhash, compiled_instructions, address_table_lookups)
       encoded_message = Transaction.encode_message(message)
 
-      hex_dump = 
-        encoded_message
-        |> Base.encode16(case: :lower)
-        |> HexDump.format()
-
-      #IO.puts(HexDump.format(hex_dump))
-      #assert hex_dump == hex_dump_reference()
       assert Base.encode16(encoded_message, case: :lower) == reference_bin()
 
-      #tx = %Solana.Transaction{
-        #payer: payer,
-        #blockhash: blockhash,
-        #instructions: [ix],
-        #signers: [{:crypto.strong_rand_bytes(64), payer}],
-        #version: 1,
-        #address_table_lookups: lookup_table_accounts
-      #}
+      tx = %Solana.Transaction{
+        payer: payer,
+        blockhash: blockhash,
+        instructions: [ix],
+        signers: [{:crypto.strong_rand_bytes(64), payer}],
+        version: 1,
+        address_table_lookups: lookup_table_accounts
+      }
 
-      #{:ok, bin} = Solana.Transaction.to_binary(tx)
-      #dbg(bin, limit: :infinity)
-      #dbg(byte_size(bin))
-      #assert byte_size(bin) < 1232
+      {:ok, bin} = Solana.Transaction.to_binary(tx)
+
+      assert byte_size(bin) < 1232
     end
 
     test "v0 transaction builds address_table_lookups automatically and encodes < 1232 bytes" do
-      lookup_table_addresses = [
-        "9AKCoNoAGYLW71TwTHY9e7KrZUWWL3c7VtHKb66NT3EV",
-        "DHX2A6WncCGUaPVMsZefarm8aPJNXvG2VSB621MkuwYF"
-      ]
-
       lookup_table_accounts = [
         %{
           address: "9AKCoNoAGYLW71TwTHY9e7KrZUWWL3c7VtHKb66NT3EV",
@@ -616,7 +601,7 @@ defmodule Solana.TransactionTest do
       }
 
       assert {:ok, bin} = Transaction.to_binary(tx)
-      assert {parsed, extras} = Transaction.parse(bin)
+      assert {parsed, _extras} = Transaction.parse(bin)
       assert parsed.version == 1
       assert parsed.blockhash == blockhash
       assert length(parsed.address_table_lookups) == 1
@@ -808,54 +793,6 @@ defmodule Solana.TransactionTest do
   end
 
   defp reference_bin do
-    Base.encode16(<<128, 1, 0, 5, 12, 126, 197, 119, 48, 59, 129, 9, 85, 192, 221, 241, 170, 158, 140, 12, 244,
-      158, 232, 48, 221, 117, 175, 130, 101, 176, 65, 247, 174, 54, 121, 56, 245, 219, 237, 142,
-      191, 91, 190, 152, 61, 82, 26, 140, 5, 78, 105, 139, 150, 172, 22, 210, 1, 184, 114, 24, 84,
-      240, 112, 218, 191, 67, 134, 2, 167, 88, 239, 103, 127, 181, 99, 94, 100, 115, 114, 75, 112,
-      225, 107, 100, 5, 84, 3, 78, 164, 122, 28, 123, 63, 205, 136, 133, 60, 65, 93, 50, 84, 231,
-      227, 72, 142, 86, 218, 198, 109, 211, 196, 228, 6, 133, 61, 42, 122, 144, 97, 208, 154, 127,
-      168, 243, 247, 226, 146, 191, 178, 73, 149, 131, 21, 217, 175, 13, 57, 224, 125, 63, 12,
-      176, 13, 21, 41, 121, 7, 185, 119, 246, 155, 132, 158, 237, 37, 43, 200, 226, 101, 246, 31,
-      65, 203, 47, 166, 11, 72, 7, 79, 117, 184, 234, 48, 105, 201, 237, 63, 6, 188, 50, 25, 120,
-      42, 228, 205, 142, 92, 157, 55, 73, 130, 86, 177, 152, 75, 157, 80, 3, 175, 245, 229, 169,
-      43, 125, 251, 114, 27, 231, 43, 212, 81, 245, 66, 23, 164, 216, 134, 200, 24, 200, 143, 243,
-      24, 145, 123, 254, 181, 18, 254, 4, 121, 213, 91, 242, 49, 192, 110, 238, 116, 197, 110,
-      206, 104, 21, 7, 253, 177, 178, 222, 163, 244, 142, 81, 2, 177, 205, 162, 86, 188, 19, 143,
-      58, 184, 144, 63, 183, 53, 202, 177, 198, 124, 89, 175, 72, 87, 237, 246, 27, 10, 248, 50,
-      165, 10, 124, 89, 227, 33, 145, 158, 14, 200, 169, 188, 180, 63, 250, 39, 245, 215, 246, 74,
-      116, 192, 155, 31, 41, 88, 121, 222, 75, 9, 171, 54, 223, 201, 221, 81, 75, 50, 26, 167,
-      179, 140, 229, 232, 231, 74, 217, 108, 227, 101, 159, 211, 19, 81, 0, 40, 75, 247, 120, 4,
-      91, 133, 16, 168, 243, 78, 73, 140, 146, 46, 238, 111, 195, 5, 248, 105, 82, 97, 209, 74,
-      172, 197, 188, 14, 236, 99, 93, 168, 112, 90, 31, 112, 163, 158, 227, 90, 154, 207, 11, 248,
-      242, 44, 198, 206, 73, 1, 157, 122, 65, 159, 89, 55, 201, 69, 203, 4, 134, 223, 42, 119, 66,
-      241, 54, 89, 107, 63, 236, 120, 144, 98, 51, 42, 62, 104, 117, 123, 108, 234, 146, 121, 1,
-      7, 65, 27, 8, 0, 1, 2, 3, 4, 28, 32, 7, 7, 9, 7, 47, 23, 10, 11, 24, 25, 2, 5, 26, 48, 49,
-      8, 27, 29, 27, 8, 12, 5, 13, 6, 14, 15, 16, 17, 30, 33, 8, 31, 32, 6, 3, 18, 27, 27, 19, 20,
-      21, 22, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 7, 56, 193, 32, 155, 51, 65,
-      214, 156, 129, 4, 3, 0, 0, 0, 58, 1, 100, 0, 1, 17, 1, 100, 1, 2, 43, 5, 5, 12, 0, 0, 0, 21,
-      0, 0, 0, 100, 2, 3, 232, 3, 0, 0, 0, 0, 0, 0, 126, 3, 0, 0, 0, 0, 0, 0, 50, 0, 0, 3, 148,
-      187, 197, 83, 10, 200, 93, 65, 98, 63, 228, 114, 107, 167, 57, 236, 61, 208, 255, 46, 172,
-      134, 73, 247, 1, 127, 41, 22, 180, 225, 190, 168, 6, 238, 235, 233, 242, 237, 241, 5, 10, 0,
-      9, 236, 70, 182, 110, 133, 91, 242, 147, 203, 71, 129, 251, 209, 206, 35, 119, 82, 233, 192,
-      19, 33, 111, 188, 104, 229, 31, 69, 225, 9, 110, 182, 129, 177, 254, 5, 193, 24, 7, 47, 61,
-      15, 2, 213, 198, 117, 5, 113, 14, 201, 124, 101, 104, 106, 67, 1, 135, 243, 115, 121, 214,
-      132, 181, 161, 116, 229, 153, 34, 225, 57, 106, 151, 46, 52, 23, 15, 209, 14, 0, 75, 243,
-      145, 168, 29, 103, 61, 186, 51, 240, 4, 12, 18, 13, 11, 3, 15, 14, 16>>, case: :lower)
-  end
-
-  def hex_dump_reference do
-    # encoded instructions
-    # "01 07 41 1b 08 00 01 02 03 04 1c 20 07 07 09 07 2f 17 0a 0b 18 19 02 05 1a 30 31 08 1b 1d 1b 08 0c 05 0d 06 0e 0f 10 11 1e 21 08 1f 20 06 03 12 1b 1b 13 14 15 16 22 23 24 25 26 27 28 29 2a 2b 2c 2d 2e 07 38 c1 20 9b 33 41 d6 9c 81 04 03 00 00 00 3a 01 64 00 01 11 01 64 01 02 2b 05 05 0c 00 00 00 15 00 00 00 64 02 03 e8 03 00 00 00 00 00 00 7e 03 00 00 00 00 00 00 32 00 00"
-    # encoded address table lookups
-    "03 94 bb c5 53 0a c8 5d 41 62 3f e4 72 6b a7 39 ec 3d d0 ff 2e ac 86 49 f7 01 7f 29 16 b4 e1 be a8 06 ee eb e9 f2 ed f1 05 0a 00 09 ec 46 b6 6e 85 5b f2 93 cb 47 81 fb d1 ce 23 77 52 e9 c0 13 21 6f bc 68 e5 1f 45 e1 09 6e b6 81 b1 fe 05 c1 18 07 2f 3d 0f 02 d5 c6 75 05 71 0e c9 7c 65 68 6a 43 01 87 f3 73 79 d6 84 b5 a1 74 e5 99 22 e1 39 6a 97 2e 34 17 0f d1 0e 00 4b f3 91 a8 1d 67 3d ba 33 f0 04 0c 12 0d 0b 03 0f 0e 10"
-  end
-end
-defmodule HexDump do
-  def format(hex_string) do
-    hex_string
-    |> String.replace("\n", "")
-    |> String.graphemes()
-    |> Enum.chunk_every(2)
-    |> Enum.map_join(" ", &Enum.join/1)
+    "80010002080000000000000000000000000000000000000000000000000000000000000001477012c01cdc20c7124d94f6f71a0e90d0887396ff16cecea27ddd66b1e814b4b69aaf2b9dac6b8d24f4109cb1664c01d23c68140f04f5c6ee886e7f10fbe573089c77c07798a0346ccad57c9037dc8ec64bae5674d62d04fd3b6cc298a65191795a4529c3bc7c233d982df3cad38df781c9567917dd34f3c08e3426abe8a7727422cc224344c5cc3b5c9ad18fa93b721759d02edd14a0a006a7e4b5629c3f100479d55bf231c06eee74c56ece681507fdb1b2dea3f48e5102b1cda256bc138fb43ffa27f5d7f64a74c09b1f295879de4b09ab36dfc9dd514b321aa7b38ce5e8d9feede0ea1dc6f1f30d3888faa8b50d7779dfa7f8aaf7589fd1569da5c0cbb50106150b000102060c0607060d0b00080109020a0304050e24e517cb977ae3ad2a010000001101640001e803000000000000790300000000000032000001c8e5da50ca5b5aece6139c51d8e7ac1da6a71909d452ff277b664d92738f37a4031f9e220409231524"
   end
 end

@@ -130,7 +130,6 @@ defmodule Solana.Transaction do
 
   def to_binary(%__MODULE__{version: 1, address_table_lookups: lookup_table_accounts} = tx) do
     with {:ok, ixs} <- check_instructions(List.flatten(tx.instructions)),
-         dbg(Enum.count(ixs)),
          compiled_keys = compile_keys(ixs, tx.payer),
          {address_table_lookups, account_keys_from_lookups, updated_compiled_keys} =
            process_address_lookup_tables(lookup_table_accounts, compiled_keys),
@@ -158,9 +157,6 @@ defmodule Solana.Transaction do
         |> Enum.map(&sign(&1, encoded_message))
         |> CompactArray.to_iolist()
 
-      IO.puts("Hex dump: " <> Base.encode16(encoded_message, case: :lower))
-      dbg(encoded_message, limit: :infinity)
-
       binary = :erlang.list_to_binary([signatures, encoded_message])
       {:ok, binary}
     else
@@ -184,7 +180,7 @@ defmodule Solana.Transaction do
         binary |> :erlang.binary_to_list()
       end)
 
-    header = encode_message_v0_header(message.header) |> dbg()
+    header = encode_message_v0_header(message.header)
     CompactArray.to_iolist(header) |> :erlang.list_to_binary() |> Base.encode16(case: :lower)
 
     [
@@ -196,7 +192,6 @@ defmodule Solana.Transaction do
       encode_address_table_lookups(message.address_table_lookups)
     ]
     |> :erlang.list_to_binary()
-    |> dbg(limit: :infinity)
   end
 
   defp encode_message_v0_header(header) do
@@ -255,11 +250,8 @@ defmodule Solana.Transaction do
                                       readonly_indexes: r
                                     }
                                   } ->
-          dbg(account_key)
           [B58.decode58!(account_key) |> :erlang.binary_to_list(), CompactArray.to_iolist(w), CompactArray.to_iolist(r)]
         end)
-
-    dbg(encoded_lookups)
 
     [
       CompactArray.encode_length(length(lookups))
@@ -294,10 +286,7 @@ defmodule Solana.Transaction do
 
   # https://docs.solana.com/developing/programming-model/transactions#instruction-format
   defp encode_instructions(ixs) do
-    dbg(length(ixs))
-
     Enum.map(ixs, fn ix ->
-      dbg(ix.account_indices,limit: :infinity)
       [
         length(ixs),
         ix.program_idx,
@@ -353,13 +342,10 @@ defmodule Solana.Transaction do
         with_payer_index,
         &%{&1 | address: &1.key_meta.key, key_meta: %KeyMeta{key: &1.key_meta.key, signer?: true, writable?: true, invoked?: &1.key_meta.invoked?}}
       )
-      |> dbg()
 
     final_key_meta_list =
       for ix <- instructions, reduce: key_meta_list do
         k ->
-          dbg(Enum.count(ix.accounts))
-
         with_program_inserted =
             get_or_insert_default.(ix.program, k)
 
@@ -398,12 +384,11 @@ defmodule Solana.Transaction do
 
     %Solana.CompiledKeys{
       payer: payer,
-      key_meta: final_key_meta_list |> dbg()
+      key_meta: final_key_meta_list
     }
   end
 
   def process_address_lookup_tables(lookup_table_accounts, compiled_keys) do
-    dbg(lookup_table_accounts)
     {address_table_lookups, account_keys_from_lookups, updated_compiled_keys} =
       Enum.reduce(
         lookup_table_accounts,
@@ -411,7 +396,6 @@ defmodule Solana.Transaction do
         fn lookup_table,
            {acc_lookups, %{writable: writable, readonly: readonly}, compiled_keys} ->
           if table_lookup = extract_table_lookup(lookup_table, compiled_keys) do
-            dbg(table_lookup)
             updated_lookups = [table_lookup | acc_lookups]
 
             updated_writable = writable ++ table_lookup.keys_from_lookup.writable
@@ -439,7 +423,7 @@ defmodule Solana.Transaction do
     writable_meta_filter = fn meta -> not meta.signer? && not meta.invoked? && meta.writable? end
 
     {writable_keys, writable_indexes, updated_compiled_keys} =
-      get_keys_with_indexes(lookup_table, compiled_keys, writable_meta_filter) |> dbg()
+      get_keys_with_indexes(lookup_table, compiled_keys, writable_meta_filter)
 
     readonly_meta_filter = fn meta ->
       not meta.signer? && not meta.invoked? && not meta.writable?
@@ -469,13 +453,10 @@ defmodule Solana.Transaction do
 
     addresses = lookup_table.state.addresses
 
-    dbg(filtered_keys, label: "Filtered keys")
-
     {keys_with_indexes, indexes} =
       Enum.reduce(filtered_keys, {[], []}, fn k, {keys_with_indexes, indexes} ->
         if index = Enum.find_index(addresses, &(&1 == k)) do
-          IO.puts("Pushing key #{k} at index #{index}")
-          {[k | keys_with_indexes], [index | indexes]}|>dbg()
+          {[k | keys_with_indexes], [index | indexes]}
         else
           {keys_with_indexes, indexes}
         end
@@ -483,7 +464,6 @@ defmodule Solana.Transaction do
       |> then(fn {keys, indexes} ->
         {Enum.reverse(keys), Enum.reverse(indexes)}
       end)
-      |> dbg()
 
     updated_key_meta = 
       compiled_keys.key_meta
@@ -498,13 +478,10 @@ defmodule Solana.Transaction do
   end
 
   def get_message_components(compiled_keys) do
-    dbg(Enum.count(compiled_keys.key_meta), label: "Total keys in compiled keys")
-
     writable_signers =
       compiled_keys.key_meta
       |> Enum.filter(fn %{address: _key, key_meta: meta} -> meta.signer? && meta.writable? end)
       |> Enum.map(fn %{address: key, key_meta: _meta} -> key end)
-      |> dbg()
 
     readonly_signers =
       compiled_keys.key_meta
@@ -523,8 +500,6 @@ defmodule Solana.Transaction do
 
     header = create_header(writable_signers, readonly_signers, readonly_non_signers)
 
-    dbg(header)
-
     static_account_keys =
       writable_signers ++ readonly_signers ++ writable_non_signers ++ readonly_non_signers
 
@@ -539,17 +514,13 @@ defmodule Solana.Transaction do
   end
 
   def compile_instructions_v0(instructions, message_account_keys) do
-    dbg(message_account_keys)
     key_segments =
       (message_account_keys.static_account_keys ++
          message_account_keys.account_keys_from_lookups.writable ++
          message_account_keys.account_keys_from_lookups.readonly)
-      |> dbg()
 
     Enum.map(instructions, fn ix ->
-      dbg(ix.program)
       program_idx = Enum.find_index(key_segments, &(&1 == B58.encode58(ix.program)))
-      dbg(program_idx)
 
       account_indices =
         Enum.map(ix.accounts, fn account ->
@@ -558,7 +529,6 @@ defmodule Solana.Transaction do
 
       %{program_idx: program_idx, account_indices: account_indices, data: ix.data}
     end)
-    |> dbg()
   end
 
   def build_message_v0(
