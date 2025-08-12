@@ -23,9 +23,13 @@ defmodule Solana.MixProject do
 
   def application do
     [
-      extra_applications: [:logger],
-      mod: {Solana.Application, []}
-    ]
+      extra_applications: [:logger]
+    ] ++
+      if Mix.env() == :dev and Code.ensure_loaded?(Tidewave) and Code.ensure_loaded?(Bandit) do
+        [mod: {Solana.Application, []}] 
+      else
+        []
+      end
   end
 
   def elixirc_paths(:test), do: ["lib", "test/support"]
