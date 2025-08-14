@@ -40,7 +40,7 @@ defmodule Solana.Transaction do
 
   @typedoc """
   All the details needed to encode a transaction.
-  - version: Transaction version (0 = legacy, 1 = v0 versioned, etc.)
+  - version: Transaction version (:legacy, :v0)
   - address_table_lookups: List of address table lookups for versioned transactions.
   """
   @type address_table_lookup :: %AddressTableLookup{
@@ -54,7 +54,7 @@ defmodule Solana.Transaction do
           blockhash: binary | nil,
           instructions: [Instruction.t()],
           signers: [Solana.keypair()],
-          version: non_neg_integer(),
+          version: :legacy | :v0,
           address_table_lookups: [address_table_lookup()]
         }
 
@@ -73,7 +73,7 @@ defmodule Solana.Transaction do
     :blockhash,
     instructions: [],
     signers: [],
-    version: 0,
+    version: :v0,
     address_table_lookups: []
   ]
 
@@ -126,9 +126,9 @@ defmodule Solana.Transaction do
   via `Logger.error/1`.
   """
   @spec to_binary(tx :: t) :: {:ok, binary()} | {:error, encoding_err()}
-  def to_binary(%__MODULE__{version: 0} = tx), do: to_binary_legacy(tx)
+  def to_binary(%__MODULE__{version: :legacy} = tx), do: to_binary_legacy(tx)
 
-  def to_binary(%__MODULE__{version: 1, address_table_lookups: lookup_table_accounts} = tx) do
+  def to_binary(%__MODULE__{version: :v0, address_table_lookups: lookup_table_accounts} = tx) do
     with {:ok, ixs} <- check_instructions(List.flatten(tx.instructions)),
          compiled_keys = compile_keys(ixs, tx.payer),
          {address_table_lookups, account_keys_from_lookups, updated_compiled_keys} =
@@ -633,7 +633,7 @@ defmodule Solana.Transaction do
           payer: account_keys |> List.first(),
           blockhash: blockhash,
           instructions: instructions,
-          version: 1,
+          version: :v0,
           address_table_lookups: lookups
         },
         [
@@ -835,7 +835,7 @@ defmodule Solana.Transaction do
               payer: account_keys |> List.first(),
               blockhash: blockhash,
               instructions: instructions,
-              version: 1,
+              version: :v0,
               address_table_lookups: lookups
             },
             [

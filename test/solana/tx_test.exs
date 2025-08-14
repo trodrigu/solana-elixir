@@ -228,7 +228,7 @@ defmodule Solana.TransactionTest do
         instructions: [ix],
         blockhash: blockhash,
         signers: [payer],
-        version: 1,
+        version: :v0,
         address_table_lookups: [
           %Transaction.AddressTableLookup{
             account_key: lookup_table_pubkey,
@@ -367,7 +367,7 @@ defmodule Solana.TransactionTest do
         blockhash: blockhash,
         instructions: [swap_ix],
         signers: [{:crypto.strong_rand_bytes(64), payer}],
-        version: 1,
+        version: :v0,
         address_table_lookups: lookup_table_accounts
       }
 
@@ -436,7 +436,7 @@ defmodule Solana.TransactionTest do
         blockhash: blockhash,
         instructions: [ix],
         signers: [{:crypto.strong_rand_bytes(64), payer}],
-        version: 1,
+        version: :v0,
         address_table_lookups: address_table_lookups
       }
 
@@ -590,7 +590,7 @@ defmodule Solana.TransactionTest do
         instructions: [ix],
         blockhash: blockhash,
         signers: [payer],
-        version: 1
+        version: :v0
       }
 
       assert {:ok, bin} = Transaction.to_binary(tx)
@@ -622,7 +622,7 @@ defmodule Solana.TransactionTest do
         instructions: [ix],
         blockhash: blockhash,
         signers: [payer],
-        version: 1
+        version: :v0
       }
 
       assert {:ok, bin} = Transaction.to_binary(tx)
@@ -662,7 +662,7 @@ defmodule Solana.TransactionTest do
         instructions: [ix],
         blockhash: blockhash,
         signers: [{:crypto.strong_rand_bytes(64), payer_key}],
-        version: 1,
+        version: :v0,
         address_table_lookups: [lookup]
       }
 
@@ -714,7 +714,7 @@ defmodule Solana.TransactionTest do
         instructions: [ix],
         blockhash: blockhash,
         signers: [{:crypto.strong_rand_bytes(64), payer_key}],
-        version: 1,
+        version: :v0,
         address_table_lookups: [lookup]
       }
 
@@ -761,7 +761,7 @@ defmodule Solana.TransactionTest do
         instructions: [ix],
         blockhash: blockhash,
         signers: [{:crypto.strong_rand_bytes(64), payer_key}],
-        version: 1,
+        version: :v0,
         address_table_lookups: [lookup]
       }
 
@@ -830,7 +830,7 @@ defmodule Solana.TransactionTest do
         instructions: [ix],
         blockhash: blockhash,
         signers: [{:crypto.strong_rand_bytes(64), payer_key}],
-        version: 1,
+        version: :v0,
         address_table_lookups: [lookup1, lookup2]
       }
 
