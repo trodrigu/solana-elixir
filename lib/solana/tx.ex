@@ -188,6 +188,7 @@ defmodule Solana.Transaction do
       header,
       CompactArray.to_iolist(static_account_keys_binary),
       message.blockhash |> :erlang.binary_to_list(),
+      length(message.compiled_instructions),
       encode_instructions(message.compiled_instructions),
       encode_address_table_lookups(message.address_table_lookups)
     ]
@@ -243,15 +244,20 @@ defmodule Solana.Transaction do
     do: CompactArray.to_iolist([])
 
   defp encode_address_table_lookups(lookups) do
-    encoded_lookups = Enum.flat_map(lookups, fn %{
-                                    address_table_lookup: %{
-                                      account_key: account_key,
-                                      writable_indexes: w,
-                                      readonly_indexes: r
-                                    }
-                                  } ->
-          [B58.decode58!(account_key) |> :erlang.binary_to_list(), CompactArray.to_iolist(w), CompactArray.to_iolist(r)]
-        end)
+    encoded_lookups =
+      Enum.flat_map(lookups, fn %{
+                                  address_table_lookup: %{
+                                    account_key: account_key,
+                                    writable_indexes: w,
+                                    readonly_indexes: r
+                                  }
+                                } ->
+        [
+          B58.decode58!(account_key) |> :erlang.binary_to_list(),
+          CompactArray.to_iolist(w),
+          CompactArray.to_iolist(r)
+        ]
+      end)
 
     [
       CompactArray.encode_length(length(lookups))
@@ -288,7 +294,6 @@ defmodule Solana.Transaction do
   defp encode_instructions(ixs) do
     Enum.map(ixs, fn ix ->
       [
-        length(ixs),
         ix.program_idx,
         CompactArray.to_iolist(ix.account_indices),
         CompactArray.to_iolist(ix.data)
@@ -312,7 +317,7 @@ defmodule Solana.Transaction do
     get_or_insert_default = fn pubkey, key_meta_list ->
       address = B58.encode58(pubkey)
 
-      if _key_meta = Enum.find(key_meta_list, & &1.address == address) do
+      if _key_meta = Enum.find(key_meta_list, &(&1.address == address)) do
         key_meta_list
       else
         key_meta_list ++
@@ -334,35 +339,54 @@ defmodule Solana.Transaction do
       get_or_insert_default.(payer, [])
 
     with_payer_index =
-      Enum.find_index(with_payer_inserted, & &1.address == B58.encode58(payer))
+      Enum.find_index(with_payer_inserted, &(&1.address == B58.encode58(payer)))
 
     key_meta_list =
       List.update_at(
         with_payer_inserted,
         with_payer_index,
-        &%{&1 | address: &1.key_meta.key, key_meta: %KeyMeta{key: &1.key_meta.key, signer?: true, writable?: true, invoked?: &1.key_meta.invoked?}}
+        &%{
+          &1
+          | address: &1.key_meta.key,
+            key_meta: %KeyMeta{
+              key: &1.key_meta.key,
+              signer?: true,
+              writable?: true,
+              invoked?: &1.key_meta.invoked?
+            }
+        }
       )
 
     final_key_meta_list =
       for ix <- instructions, reduce: key_meta_list do
         k ->
-        with_program_inserted =
+          with_program_inserted =
             get_or_insert_default.(ix.program, k)
 
-        program_index = Enum.find_index(with_program_inserted, & &1.address == B58.encode58(ix.program))
+          program_index =
+            Enum.find_index(with_program_inserted, &(&1.address == B58.encode58(ix.program)))
 
-        updated_key_meta_list =
-          List.update_at(
-            with_program_inserted,
-            program_index,
-            &%{&1 | address: &1.key_meta.key, key_meta: %KeyMeta{key: &1.key_meta.key, signer?: false, writable?: false, invoked?: true}}
-          )
+          updated_key_meta_list =
+            List.update_at(
+              with_program_inserted,
+              program_index,
+              &%{
+                &1
+                | address: &1.key_meta.key,
+                  key_meta: %KeyMeta{
+                    key: &1.key_meta.key,
+                    writable?: false,
+                    signer?: false,
+                    invoked?: true
+                  }
+              }
+            )
 
           for a <- ix.accounts, reduce: updated_key_meta_list do
             ki ->
               ki
               |> then(fn l ->
-                if Enum.any?(l, & &1.address == B58.encode58(a.key)) do
+                if Enum.any?(l, &(&1.address == B58.encode58(a.key))) do
                   l
                 else
                   with_a_updated =
@@ -370,12 +394,20 @@ defmodule Solana.Transaction do
                     |> get_or_insert_default.(l)
 
                   a_index =
-                    Enum.find_index(with_a_updated, & &1.address == B58.encode58(a.key))
+                    Enum.find_index(with_a_updated, &(&1.address == B58.encode58(a.key)))
 
                   List.update_at(
                     with_a_updated,
                     a_index,
-                    &%{&1 | address: &1.key_meta.key, key_meta: %KeyMeta{key: &1.key_meta.key, signer?: a.signer?, writable?: a.writable?}}
+                    &%{
+                      &1
+                      | address: &1.key_meta.key,
+                        key_meta: %KeyMeta{
+                          key: &1.key_meta.key,
+                          signer?: a.signer?,
+                          writable?: a.writable?
+                        }
+                    }
                   )
                 end
               end)
@@ -404,17 +436,18 @@ defmodule Solana.Transaction do
             {updated_lookups, %{writable: updated_writable, readonly: updated_readonly},
              table_lookup.compiled_keys}
           end
-        end)
-        |> then(fn {address_table_lookups, account_keys_from_lookups, updated_compiled_keys} ->
-          {
-            Enum.reverse(address_table_lookups),
-            %{
-              writable: account_keys_from_lookups.writable,
-              readonly: account_keys_from_lookups.readonly
-            },
-            updated_compiled_keys
-          }
-        end)
+        end
+      )
+      |> then(fn {address_table_lookups, account_keys_from_lookups, updated_compiled_keys} ->
+        {
+          Enum.reverse(address_table_lookups),
+          %{
+            writable: account_keys_from_lookups.writable,
+            readonly: account_keys_from_lookups.readonly
+          },
+          updated_compiled_keys
+        }
+      end)
 
     {address_table_lookups, account_keys_from_lookups, updated_compiled_keys}
   end
@@ -465,7 +498,7 @@ defmodule Solana.Transaction do
         {Enum.reverse(keys), Enum.reverse(indexes)}
       end)
 
-    updated_key_meta = 
+    updated_key_meta =
       compiled_keys.key_meta
       |> Enum.reject(fn meta -> meta.address in keys_with_indexes end)
 
@@ -495,7 +528,9 @@ defmodule Solana.Transaction do
 
     readonly_non_signers =
       compiled_keys.key_meta
-      |> Enum.filter(fn %{address: _key, key_meta: meta} -> not meta.signer? && not meta.writable? end)
+      |> Enum.filter(fn %{address: _key, key_meta: meta} ->
+        not meta.signer? && not meta.writable?
+      end)
       |> Enum.map(fn %{address: key, key_meta: _meta} -> key end)
 
     header = create_header(writable_signers, readonly_signers, readonly_non_signers)
@@ -515,9 +550,9 @@ defmodule Solana.Transaction do
 
   def compile_instructions_v0(instructions, message_account_keys) do
     key_segments =
-      (message_account_keys.static_account_keys ++
-         message_account_keys.account_keys_from_lookups.writable ++
-         message_account_keys.account_keys_from_lookups.readonly)
+      message_account_keys.static_account_keys ++
+        message_account_keys.account_keys_from_lookups.writable ++
+        message_account_keys.account_keys_from_lookups.readonly
 
     Enum.map(instructions, fn ix ->
       program_idx = Enum.find_index(key_segments, &(&1 == B58.encode58(ix.program)))

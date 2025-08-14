@@ -259,39 +259,105 @@ defmodule Solana.TransactionTest do
           }
         end)
 
-      # Extract swap instruction details
-      swap_ix = instruction_data["swapInstruction"]
-      program = Solana.pubkey(swap_ix["programId"]) |> elem(1)
+      compute_budget_ix_json = instruction_data["computeBudgetInstructions"]
 
-      # Map accounts for the instruction
-      accounts =
-        Enum.map(swap_ix["accounts"], fn account ->
-          %{
-            key: account["pubkey"],
-            writable?: account["isWritable"]
+      compute_budget_ixs =
+        Enum.map(compute_budget_ix_json, fn instruction ->
+          program = Solana.pubkey!(instruction["programId"])
+
+          %Solana.Instruction{
+            data: Base.decode64!(instruction["data"]),
+            program: program,
+            accounts: []
           }
         end)
 
-      # Create the instruction
-      ix = %Solana.Instruction{
-        data: Base.decode64!(swap_ix["data"]),
+      setup_ix_json = instruction_data["setupInstructions"]
+
+      setup_ixs =
+        Enum.map(setup_ix_json, fn instruction ->
+          program = Solana.pubkey!(instruction["programId"])
+
+          setup_accounts =
+            Enum.map(instruction["accounts"], fn account ->
+              %Solana.Account{
+                key: Solana.pubkey!(account["pubkey"]),
+                writable?: account["isWritable"],
+                #signer?: account["isSigner"]
+              }
+            end)
+
+          %Solana.Instruction{
+            data: Base.decode64!(instruction["data"]),
+            program: program,
+            accounts: setup_accounts
+          }
+        end)
+
+      swap_ix_json = instruction_data["swapInstruction"]
+      program = Solana.pubkey(swap_ix_json["programId"]) |> elem(1)
+
+      swap_accounts =
+        Enum.map(swap_ix_json["accounts"], fn account ->
+          %Solana.Account{
+            key: Solana.pubkey!(account["pubkey"]),
+            writable?: account["isWritable"],
+            #signer?: account["isSigner"]
+          }
+        end)
+
+      swap_ix = %Solana.Instruction{
+        data: Base.decode64!(swap_ix_json["data"]),
         program: program,
-        accounts:
-          Enum.map(accounts, fn %{key: k, writable?: w} ->
-            {:ok, key} = Solana.pubkey(k)
-            %Solana.Account{key: key, writable?: w, signer?: false}
-          end)
+        accounts: swap_accounts
       }
+
+      cleanup_ix_json = instruction_data["cleanupInstruction"]
+
+      program = Solana.pubkey!(cleanup_ix_json["programId"])
+
+      cleanup_accounts =
+        Enum.map(cleanup_ix_json["accounts"], fn account ->
+          %Solana.Account{
+            key: Solana.pubkey!(account["pubkey"]),
+            writable?: account["isWritable"],
+            #signer?: account["isSigner"]
+          }
+        end)
+
+      cleanup_ix =
+        %Solana.Instruction{
+          data: Base.decode64!(cleanup_ix_json["data"]),
+          program: program,
+          accounts: cleanup_accounts
+        }
+
+      ixs = compute_budget_ixs ++ setup_ixs ++ [swap_ix] ++ [cleanup_ix]
 
       blockhash = instruction_data["blockhashWithMetadata"]["blockhash"] |> :binary.list_to_bin()
       payer = Solana.pubkey!("11111111111111111111111111111112")
 
-       compiled_keys = Transaction.compile_keys([ix], payer)
-       {address_table_lookups, account_keys_from_lookups, updated_compiled_keys} = Transaction.process_address_lookup_tables(lookup_table_accounts, compiled_keys)
-       {header, static_account_keys} = Transaction.get_message_components(updated_compiled_keys)
-       message_account_keys = Transaction.build_message_account_keys(static_account_keys, account_keys_from_lookups)
-       compiled_instructions = Transaction.compile_instructions_v0([ix], message_account_keys)
-      message = Transaction.build_message_v0(header, static_account_keys, blockhash, compiled_instructions, address_table_lookups)
+      compiled_keys = Transaction.compile_keys(ixs, payer)
+
+      {address_table_lookups, account_keys_from_lookups, updated_compiled_keys} =
+        Transaction.process_address_lookup_tables(lookup_table_accounts, compiled_keys)
+
+      {header, static_account_keys} = Transaction.get_message_components(updated_compiled_keys)
+
+      message_account_keys =
+        Transaction.build_message_account_keys(static_account_keys, account_keys_from_lookups)
+
+      compiled_instructions = Transaction.compile_instructions_v0(ixs, message_account_keys)
+
+      message =
+        Transaction.build_message_v0(
+          header,
+          static_account_keys,
+          blockhash,
+          compiled_instructions,
+          address_table_lookups
+        )
+
       encoded_message = Transaction.encode_message(message)
 
       assert Base.encode16(encoded_message, case: :lower) == reference_bin()
@@ -299,7 +365,7 @@ defmodule Solana.TransactionTest do
       tx = %Solana.Transaction{
         payer: payer,
         blockhash: blockhash,
-        instructions: [ix],
+        instructions: [swap_ix],
         signers: [{:crypto.strong_rand_bytes(64), payer}],
         version: 1,
         address_table_lookups: lookup_table_accounts
@@ -793,6 +859,6 @@ defmodule Solana.TransactionTest do
   end
 
   defp reference_bin do
-    "80010002080000000000000000000000000000000000000000000000000000000000000001477012c01cdc20c7124d94f6f71a0e90d0887396ff16cecea27ddd66b1e814b4b69aaf2b9dac6b8d24f4109cb1664c01d23c68140f04f5c6ee886e7f10fbe573089c77c07798a0346ccad57c9037dc8ec64bae5674d62d04fd3b6cc298a65191795a4529c3bc7c233d982df3cad38df781c9567917dd34f3c08e3426abe8a7727422cc224344c5cc3b5c9ad18fa93b721759d02edd14a0a006a7e4b5629c3f100479d55bf231c06eee74c56ece681507fdb1b2dea3f48e5102b1cda256bc138fb43ffa27f5d7f64a74c09b1f295879de4b09ab36dfc9dd514b321aa7b38ce5e8d9feede0ea1dc6f1f30d3888faa8b50d7779dfa7f8aaf7589fd1569da5c0cbb50106150b000102060c0607060d0b00080109020a0304050e24e517cb977ae3ad2a010000001101640001e803000000000000790300000000000032000001c8e5da50ca5b5aece6139c51d8e7ac1da6a71909d452ff277b664d92738f37a4031f9e220409231524"
+    "800100060c0000000000000000000000000000000000000000000000000000000000000001477012c01cdc20c7124d94f6f71a0e90d0887396ff16cecea27ddd66b1e814b4b69aaf2b9dac6b8d24f4109cb1664c01d23c68140f04f5c6ee886e7f10fbe573089c77c07798a0346ccad57c9037dc8ec64bae5674d62d04fd3b6cc298a65191795a4529c3bc7c233d982df3cad38df781c9567917dd34f3c08e3426abe8a7727422cc224344c5cc3b5c9ad18fa93b721759d02edd14a0a006a7e4b5629c3f100306466fe5211732ffecadba72c39be7bc8ce5bbc5f7126b2c439b3a40000000000000000000000000000000000000000000000000000000000000000000000006ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a98c97258f4e2489f1bb3d1029148e0d830b5a1399daff1084048e7bd8dbe9f8590479d55bf231c06eee74c56ece681507fdb1b2dea3f48e5102b1cda256bc138fb43ffa27f5d7f64a74c09b1f295879de4b09ab36dfc9dd514b321aa7b38ce5e80b2109a6693434d57e9c67e2cda7db627edb9401b82dca6d93e71011b1eef4f10606000502c05c1500070200010c02000000e803000000000000080101011109060002000f070801010a15080001020a0f0a0b0a1008000c010d020e0304051124e517cb977ae3ad2a010000001101640001e8030000000000007a030000000000003200000803010000010901c8e5da50ca5b5aece6139c51d8e7ac1da6a71909d452ff277b664d92738f37a4031f9e2203231524"
   end
 end
