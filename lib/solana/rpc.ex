@@ -37,16 +37,23 @@ defmodule Solana.RPC do
       {:ok, %{body: body}} ->
         [%{"result" => signature}] = body
         [signature]
-      {:error, %{"data" => %{"logs" => logs}, "message" => message}} ->
-        [message | logs]
-        |> Enum.join("\n")
-        |> Logger.error()
+       
+      errors ->
+        Enum.map(errors, fn {:error, %{"data" => %{"logs" => logs}, "message" => message}} ->
+          error_message =
+            [message | logs]
+            |> Enum.join("\n")
 
-        []
+          Logger.error(error_message)
+
+          {:error, error_message}
+        end)
     end
     |> case do
-      [] ->
-        :error
+      [{:error, _} | _rest] = errors ->
+        messages = Enum.map(errors, fn {:error, message} -> message end)
+
+        {:error, messages}
 
       signatures ->
         :ok = RPC.Tracker.start_tracking(tracker, signatures, request_opts)
