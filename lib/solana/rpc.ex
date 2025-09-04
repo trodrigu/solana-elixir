@@ -34,26 +34,35 @@ defmodule Solana.RPC do
     url
     |> RPC.send(requests)
     |> case do
+      {:ok, %{body: [%{"error" => _, "id" => 0, "jsonrpc" => "2.0"} = body | _]}} ->
+        %{"error" => %{"data" => %{"logs" => logs}, "message" => message}} = body
+
+        error_message =
+          [message | logs]
+          |> Enum.join("\n")
+
+        #Logger.error(error_message)
+
+        {:error, error_message}
+
       {:ok, %{body: body}} ->
         [%{"result" => signature}] = body
         [signature]
-       
+
       errors ->
         Enum.map(errors, fn {:error, %{"data" => %{"logs" => logs}, "message" => message}} ->
           error_message =
             [message | logs]
             |> Enum.join("\n")
 
-          Logger.error(error_message)
+          #Logger.error(error_message)
 
           {:error, error_message}
         end)
     end
     |> case do
-      [{:error, _} | _rest] = errors ->
-        messages = Enum.map(errors, fn {:error, message} -> message end)
-
-        {:error, messages}
+      {:error, message} ->
+        {:error, message}
 
       signatures ->
         :ok = RPC.Tracker.start_tracking(tracker, signatures, request_opts)
