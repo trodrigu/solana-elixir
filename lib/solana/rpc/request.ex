@@ -184,7 +184,7 @@ defmodule Solana.RPC.Request do
   """
   @spec get_transaction(signature :: Solana.key(), opts :: keyword) :: t
   def get_transaction(signature, opts \\ []) do
-    {"getTransaction", [B58.encode58(signature), encode_opts(opts)]}
+    {"getTransaction", [signature, encode_opts(opts)]}
   end
 
   @doc """
